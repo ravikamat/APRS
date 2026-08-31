@@ -3,6 +3,7 @@ tools/universal_browser_scraper.py — Universal Data-Driven Marketplace Scraper
 
 ONE scraper that works for ANY marketplace (Amazon, Flipkart, Meesho, Myntra, Shopify, etc.)
 by reading configuration from the database and using browser-use's LLM-powered extraction.
+All outputs are validated by AI Supervisor for quality assurance.
 
 Architecture:
 1. Read marketplace_config from DB (selectors, URLs, pagination, extraction prompt)
@@ -10,6 +11,7 @@ Architecture:
 3. Agent navigates, searches, paginates, extracts structured data via LLM
 4. Store results in scraped_listings table
 5. Update config success_rate for adaptive learning
+6. AI Supervisor validates every scraped product in real-time
 
 No hardcoded scrapers. No CSS selector maintenance in code. 100% data-driven.
 """
@@ -34,6 +36,7 @@ from core.database import (
     seed_initial_marketplace_configs
 )
 from core.utils import normalize_region
+from tools.ai_supervisor import get_supervisor
 
 logger = logging.getLogger("aprs.universal_scraper")
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s — %(message)s")
