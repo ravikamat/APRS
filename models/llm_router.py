@@ -116,8 +116,8 @@ class LLMRouter:
 
     def _init_local(self):
         """Initialize Ollama/llama.cpp clients from env/config."""
-        ollama_url = os.getenv("OLLAMA_URL", LOCAL_GGUF_CONFIG.get("ollama_url", "http://localhost:11434"))
-        self.ollama_model = os.getenv("LOCAL_QWEN_27B_MODEL", LOCAL_GGUF_CONFIG.get("default_model", "qwen2.5:27b-instruct-q4_K_M"))
+        ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+        self.ollama_model = os.getenv("LOCAL_OLLAMA_MODEL", os.getenv("LOCAL_QWEN_27B_MODEL", "qwen27b_iq1"))
 
         try:
             import ollama
@@ -225,8 +225,8 @@ class LLMRouter:
         force_json: bool
     ) -> LLMResponse:
         """Query local Ollama model (e.g. Qwen 27B / 14B / Llama 8B GGUF fallback)."""
-        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-        model_name = self.ollama_model or os.getenv("LOCAL_OLLAMA_MODEL", "qwen2.5:14b")
+        ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+        model_name = self.ollama_model or os.getenv("LOCAL_OLLAMA_MODEL", "qwen27b_iq1")
         start = time.time()
 
         # Build messages
