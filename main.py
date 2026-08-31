@@ -2,6 +2,8 @@ import argparse
 import sys
 import time
 import subprocess
+import signal
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -13,6 +15,28 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 from core.orchestrator import AutonomousProductResearchOrchestrator
 from core.excel_manager import update_master_excel
 from core.background_daemon import daemon_controller
+
+
+_streamlit_process = None
+
+
+def _signal_handler(signum, frame):
+    """Handle Ctrl+C gracefully - stop Streamlit and daemon."""
+    print("\n[MAIN] Ctrl+C received — shutting down gracefully...")
+    global _streamlit_process
+    if _streamlit_process and _streamlit_process.poll() is None:
+        print("[MAIN] Terminating Streamlit process...")
+        try:
+            _streamlit_process.terminate()
+            _streamlit_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            print("[MAIN] Force killing Streamlit process...")
+            _streamlit_process.kill()
+            _streamlit_process.wait()
+    print("[MAIN] Stopping daemon...")
+    daemon_controller.stop()
+    print("[MAIN] Shutdown complete.")
+    sys.exit(0)
 
 
 def run_cli_pipeline(region="India", category="Smart Kitchen Storage", max_candidates=5):
@@ -32,11 +56,39 @@ def launch_web_ui():
     print("24/7 Background Scraping Daemon: ACTIVE (23 Niches)")
     print("=======================================================\n")
 
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
     # Start the continuous background scraping daemon
     daemon_controller.start()
 
     app_path = Path(__file__).resolve().parent / "web" / "app.py"
-    subprocess.run(["streamlit", "run", str(app_path), "--server.headless", "true"])
+    global _streamlit_process
+    _streamlit_process = subprocess.Popen(
+        ["streamlit", "run", str(app_path), "--server.headless", "true"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+    )
+
+    try:
+        # Wait for the process to complete (it won't unless terminated)
+        _streamlit_process.wait()
+    except KeyboardInterrupt:
+        # This shouldn't be reached due to signal handler, but just in case
+        pass
+    finally:
+        # Ensure cleanup
+        if _streamlit_process and _streamlit_process.poll() is None:
+            _streamlit_process.terminate()
+            try:
+                _streamlit_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _streamlit_process.kill()
+                _streamlit_process.wait()
+        daemon_controller.stop()
+        print("[MAIN] Shutdown complete.")
 
 
 def run_overnight_daemon():

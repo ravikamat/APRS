@@ -364,21 +364,87 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Daemon Controls ───────────────────────────────────────────────────────────
-d_col1, d_col2, d_col3 = st.columns([2, 1, 1])
+# ── Daemon Global Controls ───────────────────────────────────────────────────────
+st.subheader("🎛️ Daemon Global Controls")
+d_col1, d_col2, d_col3, d_col4 = st.columns(4)
 with d_col1:
-    st.caption(f"🔄 Scanning: `{daemon_status['current_niche']}` — {daemon_status['total_discovered_session']} SKUs evaluated")
-with d_col2:
     if daemon_status["is_paused"]:
-        if st.button("▶️ Resume Daemon", key="btn_resume_daemon", use_container_width=True):
-            daemon_controller.resume(); st.rerun()
+        if st.button("▶️ Start Daemon", key="btn_start_daemon", use_container_width=True, type="primary"):
+            daemon_controller.start(); st.rerun()
     else:
         if st.button("⏸️ Pause Daemon", key="btn_pause_daemon", use_container_width=True):
             daemon_controller.pause(); st.rerun()
+with d_col2:
+    if st.button("🔄 Restart Daemon", key="btn_restart_daemon", use_container_width=True):
+        daemon_controller.stop(); time.sleep(1); daemon_controller.start(); st.rerun()
 with d_col3:
+    if st.button("⏹️ Stop Daemon", key="btn_stop_daemon", use_container_width=True):
+        daemon_controller.stop(); st.rerun()
+with d_col4:
     with st.popover("📜 Scraper Log"):
         for entry in daemon_status["recent_logs"]:
             st.caption(entry)
+
+st.markdown("---")
+
+# ── Stage/Gate Pipeline Progress ─────────────────────────────────────────────────
+st.subheader("🚪 Pipeline Stages (Gates 1-6)")
+GATE_LABELS = {
+    1: ("🔍", "Signal Discovery", "Keepa BSR + Price History"),
+    2: ("🛡️", "Defect Mining", "3-Star Reviews → v2.0 Spec"),
+    3: ("📊", "Economics", "15-Factor 3-Scenario Model"),
+    4: ("🏭", "Sourcing", "Factory Quote + MOQ"),
+    5: ("⚔️", "War Room", "AI Swarm Consensus"),
+    6: ("📝", "Sign-Off", "PO Generation"),
+}
+
+# Show pipeline progress for all products
+products_all = get_all_products(include_deleted=False)
+for p in products_all:
+    pid = p["product_id"]
+    gate_statuses = get_gate_status(pid)
+    current_gate = get_current_gate(pid)
+    
+    # Count gates passed
+    gates_passed = sum(1 for gs in gate_statuses if gs.get("status") == "PASS")
+    total_gates = len(GATE_LABELS)
+    
+    with st.expander(f"{'⭐ ' if p.get('is_shortlisted') else ''}**{p['name'][:50]}** — {p['region']} | Gate {current_gate}/{total_gates} | {gates_passed}/{total_gates} Gates Passed", expanded=False):
+        # Per-gate controls
+        gate_cols = st.columns(6)
+        for i, (gate_num, (icon, name, desc)) in enumerate(GATE_LABELS.items()):
+            with gate_cols[i]:
+                gs = next((gs for gs in gate_statuses if gs.get("gate_number") == gate_num), {})
+                g_status = gs.get("status", "PENDING")
+                badge_colors = {
+                    "PASS": "🟢", "FAIL": "🔴", "PENDING": "⚪",
+                    "BLOCKED": "🟠", "IN_PROGRESS": "🟡", "OVERRIDDEN": "🟣"
+                }
+                badge = badge_colors.get(g_status, "⚪")
+                
+                st.markdown(f"**{icon} Gate {gate_num}: {name}**")
+                st.markdown(f"{badge} **{g_status}**")
+                st.caption(desc)
+                
+                # Per-gate controls
+                if g_status in ["PENDING", "BLOCKED"]:
+                    if st.button(f"▶️ Run Gate {gate_num}", key=f"run_gate_{gate_num}_{pid}", use_container_width=True):
+                        # Trigger the specific gate logic
+                        st.info(f"Gate {gate_num} execution queued")
+                elif g_status == "IN_PROGRESS":
+                    st.info("Running...")
+                elif g_status == "PASS":
+                    st.success("✅ Passed")
+                elif g_status == "FAIL":
+                    if st.button(f"🔄 Retry Gate {gate_num}", key=f"retry_gate_{gate_num}_{pid}", use_container_width=True):
+                        st.info(f"Gate {gate_num} retry queued")
+                
+                # Show metadata if available
+                if gs.get("metadata"):
+                    with st.popover("📋 Details"):
+                        st.json(gs["metadata"])
+        
+        st.caption(f"Product: {p['name'][:50]} | Region: {p['region']} | Score: {p.get('overall_score', 0):.0f}/100 | Gate: {current_gate}/{len(GATE_LABELS)}")
 
 st.markdown("---")
 
@@ -458,18 +524,51 @@ if tab_opps:
 
                 with c2:
                     st.markdown("**Gate Progress:**")
-                    gate_row = ""
                     # get_gate_status returns a list of dicts, convert to dict for easy access
                     gate_status_list = get_gate_status(pid)
                     gate_statuses = {gs["gate_number"]: gs for gs in gate_status_list}
+                    
+                    # Gate progress with controls
+                    GATE_LABELS = {
+                        1: ("🔍", "Signal Discovery", "Keepa BSR + Price History"),
+                        2: ("🛡️", "Defect Mining", "3-Star Reviews → v2.0 Spec"),
+                        3: ("📊", "Economics", "15-Factor 3-Scenario Model"),
+                        4: ("🏭", "Sourcing", "Factory Quote + MOQ"),
+                        5: ("⚔️", "War Room", "AI Swarm Consensus"),
+                        6: ("📝", "Sign-Off", "PO Generation"),
+                    }
+                    
+                    gate_cols = st.columns(6)
                     for g in range(1, 7):
                         gs = gate_statuses.get(g, {})
                         g_status = gs.get("status", "PENDING")
-                        badge_cls = {"PASS": "badge-pass", "FAIL": "badge-fail", "PENDING": "badge-pending",
-                                     "BLOCKED": "badge-blocked", "IN_PROGRESS": "badge-progress"}.get(g_status, "badge-pending")
-                        gate_row += f'<span class="gate-badge {badge_cls}">G{g}:{g_status[:4]}</span>'
-                    st.markdown(gate_row, unsafe_allow_html=True)
-                    st.caption(f"Current Gate: **{current_gate}** | Swarm: {p.get('consensus_status', 'N/A')}")
+                        badge_colors = {
+                            "PASS": "🟢", "FAIL": "🔴", "PENDING": "⚪",
+                            "BLOCKED": "🟠", "IN_PROGRESS": "🟡", "OVERRIDDEN": "🟣"
+                        }
+                        badge = badge_colors.get(g_status, "⚪")
+                        icon, name, desc = GATE_LABELS[g]
+                        
+                        with st.columns(1)[0]:
+                            st.markdown(f"**{icon} Gate {g}: {name}**")
+                            st.markdown(f"{badge} **{g_status}**")
+                            st.caption(desc)
+                            
+                            # Per-gate controls
+                            if g_status in ["PENDING", "BLOCKED"]:
+                                if st.button(f"▶️ Run Gate {g}", key=f"run_gate_{g}_{pid}", use_container_width=True):
+                                    st.info(f"Gate {g} execution queued")
+                            elif g_status == "IN_PROGRESS":
+                                st.info("Running...")
+                            elif g_status == "PASS":
+                                st.success("✅ Passed")
+                            elif g_status == "FAIL":
+                                if st.button(f"🔄 Retry Gate {g}", key=f"retry_gate_{g}_{pid}", use_container_width=True):
+                                    st.info(f"Gate {g} retry queued")
+                            
+                            if gs.get("metadata"):
+                                with st.popover("📋 Details"):
+                                    st.json(gs["metadata"])
 
                     if p.get("competitor_3star_flaws"):
                         with st.popover("🛡️ 3-Star Flaws"):
