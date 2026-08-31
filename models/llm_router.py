@@ -224,10 +224,9 @@ class LLMRouter:
         max_tokens: int,
         force_json: bool
     ) -> LLMResponse:
-        """Query local Ollama model (Qwen 27B fallback)."""
-        if not self.ollama_client:
-            raise RuntimeError("Ollama client not initialized")
-
+        """Query local Ollama model (e.g. Qwen 27B / 14B / Llama 8B GGUF fallback)."""
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        model_name = self.ollama_model or os.getenv("LOCAL_OLLAMA_MODEL", "qwen2.5:14b")
         start = time.time()
 
         # Build messages
@@ -235,41 +234,60 @@ class LLMRouter:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ]
-
-        # Add JSON format hint if needed
         if force_json:
             messages.append({"role": "system", "content": "Respond ONLY with valid JSON. No markdown, no explanations."})
 
-        try:
-            response = await self.ollama_client.chat(
-                model=self.ollama_model,
-                messages=messages,
-                options={
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                },
-                format="json" if force_json else None
-            )
+        content = ""
+        # 1. Try via AsyncClient if available
+        if self.ollama_client:
+            try:
+                response = await self.ollama_client.chat(
+                    model=model_name,
+                    messages=messages,
+                    options={
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                    format="json" if force_json else None
+                )
+                content = response.get("message", {}).get("content", "")
+            except Exception as e:
+                logger.debug(f"Ollama SDK client call failed: {e}. Falling back to direct HTTP...")
 
-            latency_ms = int((time.time() - start) * 1000)
-            self.metrics["ollama_calls"] += 1
-            self.metrics["fallback_triggered"] = self.metrics.get("fallback_triggered", 0) + 1
+        # 2. Fallback to direct HTTP REST endpoint if SDK failed or wasn't loaded
+        if not content:
+            try:
+                import httpx
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "options": {"temperature": temperature, "num_predict": max_tokens},
+                    "stream": False
+                }
+                if force_json:
+                    payload["format"] = "json"
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(f"{ollama_url.rstrip('/')}/api/chat", json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = data.get("message", {}).get("content", "")
+                    else:
+                        raise RuntimeError(f"Ollama HTTP {resp.status_code}: {resp.text[:200]}")
+            except Exception as http_err:
+                self.metrics["ollama_failures"] += 1
+                raise RuntimeError(f"Ollama query failed on both SDK and HTTP: {http_err}")
 
-            content = response.get("message", {}).get("content", "")
-            
-            # Log fallback indicator
-            logger.info(f"🔄 FALLBACK ACTIVATED: Switched to Qwen ({self.ollama_model}) for task | Latency: {latency_ms}ms")
-            
-            return LLMResponse(
-                content=content,
-                provider=LLMProvider.OLLAMA,
-                model=f"qwen-fallback:{self.ollama_model}",
-                latency_ms=latency_ms
-            )
+        latency_ms = int((time.time() - start) * 1000)
+        self.metrics["ollama_calls"] += 1
+        self.metrics["fallback_triggered"] = self.metrics.get("fallback_triggered", 0) + 1
 
-        except Exception as e:
-            self.metrics["ollama_failures"] += 1
-            raise RuntimeError(f"Ollama query failed: {e}")
+        logger.info(f"🔄 FALLBACK ACTIVATED: Switched to Local Ollama GGUF ({model_name}) | Latency: {latency_ms}ms")
+        return LLMResponse(
+            content=content,
+            provider=LLMProvider.OLLAMA,
+            model=f"ollama-local:{model_name}",
+            latency_ms=latency_ms
+        )
 
     def get_status(self) -> Dict[str, Any]:
         """Get router status and metrics."""

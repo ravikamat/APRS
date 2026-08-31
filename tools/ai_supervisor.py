@@ -656,7 +656,7 @@ JSON: {{"strategic_recommendations": [...], "priority_focus": "..."}}"""
     # ═══════════════════════════════════════════════════════════════════════════════
     
     def _nim_query(self, prompt: str, task_type: str = "ultra_reasoning", max_tokens: int = 2000, temperature: float = 0.2) -> str:
-        """Query NIM with supervision-optimized parameters."""
+        """Query NIM with supervision-optimized parameters, with automatic local Ollama GGUF fallback."""
         try:
             res = self.cluster.query(
                 prompt=prompt,
@@ -670,7 +670,26 @@ JSON: {{"strategic_recommendations": [...], "priority_focus": "..."}}"""
                 return res.get("content", "")
             return str(res)
         except Exception as e:
-            logger.warning(f"NIM query error: {e}")
+            logger.warning(f"NIM query notice: {e}. Trying local Ollama fallback...")
+            try:
+                from models.llm_router import LLMRouter, LLMTaskType
+                router = LLMRouter()
+                import asyncio
+                loop = asyncio.new_event_loop()
+                resp = loop.run_until_complete(
+                    router._query_ollama(
+                        prompt=prompt,
+                        system_prompt="You are the AI SUPERVISOR for an autonomous e-commerce intelligence system. Respond in valid JSON only.",
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        force_json=True
+                    )
+                )
+                loop.close()
+                if resp and resp.content:
+                    return resp.content
+            except Exception as oe:
+                logger.debug(f"Ollama supervisor fallback note: {oe}")
             return ""
     
     def _extract_json(self, raw: str) -> dict:
