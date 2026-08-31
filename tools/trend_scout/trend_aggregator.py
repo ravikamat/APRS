@@ -203,119 +203,131 @@ class OpenWebTrendScout(BaseSourceAdapter):
         Runs comprehensive multi-source scouting across Google Trends, Reddit, and dynamically
         discovered sources. Seeds and communities are loaded from DB first; falls back to
         hardcoded lists only if DB is empty. Discovered keywords are fed back as new seeds.
+        All outputs are validated by AI Supervisor for quality assurance.
         """
         import time as _time
         all_signals = []
         norm_region = normalize_region(region)
+        
+        # Register with AI Supervisor for active monitoring
+        supervisor = get_supervisor()
+        task_id = supervisor.register_task("search_products", f"trend_harvest_{region}", region=region)
+        
+        with supervisor.supervise(task_id) as task:
+            all_signals = []
+            norm_region = normalize_region(region)
 
-        # ── Load dynamic seeds from DB, fallback to hardcoded ────────────────
-        db_seeds = get_seed_keywords(region=norm_region, limit=20)
-        if db_seeds:
-            seeds = [s["keyword"] for s in db_seeds]
-            # Mark seeds as used
-            for s in db_seeds[:4]:
+            # ── Load dynamic seeds from DB, fallback to hardcoded ────────────────
+            db_seeds = get_seed_keywords(region=norm_region, limit=20)
+            if db_seeds:
+                seeds = [s["keyword"] for s in db_seeds]
+                # Mark seeds as used
+                for s in db_seeds[:4]:
+                    try:
+                        update_seed_usage(s["seed_id"])
+                    except Exception:
+                        pass
+            else:
+                seeds = VIRAL_SEED_ROOTS.get(norm_region, VIRAL_SEED_ROOTS.get("India", []))
+
+            # 1. Google Autocomplete Search Breakout (using dynamic seeds)
+            for seed in seeds[:6]:
+                google_signals = self.scout_google_breakout_queries(seed, region=region)
+                all_signals.extend(google_signals)
+                self.record_success(len(google_signals), 500)
+                _time.sleep(0.8)
+
+            # ── Load dynamic Reddit communities from DB, fallback to hardcoded ───
+            db_communities = get_discovered_sources(source_type="community_reddit", region=region)
+            if db_communities:
+                subreddits = []
+                for c in db_communities:
+                    url = c.get("url", "")
+                    # Extract subreddit name from URL
+                    match = re.search(r'/r/([^/]+)', url)
+                    if match:
+                        subreddits.append({"name": match.group(1), "source_id": c.get("source_id")})
+            else:
+                subreddits = [{"name": s, "source_id": None} for s in COMMUNITY_SUBREDDITS]
+
+            # 2. Reddit Community Breakout (using dynamic communities)
+            for sub_info in subreddits[:5]:
+                reddit_signals = self.scout_reddit_product_discussions(subreddit=sub_info["name"], limit=4)
+                all_signals.extend(reddit_signals)
+                if sub_info.get("source_id"):
+                    update_source_usage(sub_info["source_id"], yielded_results=len(reddit_signals) > 0)
+                self.record_success(len(reddit_signals), 800)
+
+            # ── 3. Explore dynamically discovered trend sources ──────────────────
+            db_trend_sources = get_discovered_sources(source_type="trend", region=region)
+            for src in db_trend_sources[:3]:
                 try:
-                    update_seed_usage(s["seed_id"])
-                except Exception:
-                    pass
-        else:
-            seeds = VIRAL_SEED_ROOTS.get(norm_region, VIRAL_SEED_ROOTS.get("India", []))
-
-        # 1. Google Autocomplete Search Breakout (using dynamic seeds)
-        for seed in seeds[:6]:
-            google_signals = self.scout_google_breakout_queries(seed, region=region)
-            all_signals.extend(google_signals)
-            self.record_success(len(google_signals), 500)
-            _time.sleep(0.8)
-
-        # ── Load dynamic Reddit communities from DB, fallback to hardcoded ───
-        db_communities = get_discovered_sources(source_type="community_reddit", region=region)
-        if db_communities:
-            subreddits = []
-            for c in db_communities:
-                url = c.get("url", "")
-                # Extract subreddit name from URL
-                match = re.search(r'/r/([^/]+)', url)
-                if match:
-                    subreddits.append({"name": match.group(1), "source_id": c.get("source_id")})
-        else:
-            subreddits = [{"name": s, "source_id": None} for s in COMMUNITY_SUBREDDITS]
-
-        # 2. Reddit Community Breakout (using dynamic communities)
-        for sub_info in subreddits[:5]:
-            reddit_signals = self.scout_reddit_product_discussions(subreddit=sub_info["name"], limit=4)
-            all_signals.extend(reddit_signals)
-            if sub_info.get("source_id"):
-                update_source_usage(sub_info["source_id"], yielded_results=len(reddit_signals) > 0)
-            self.record_success(len(reddit_signals), 800)
-
-        # ── 3. Explore dynamically discovered trend sources ──────────────────
-        db_trend_sources = get_discovered_sources(source_type="trend", region=region)
-        for src in db_trend_sources[:3]:
-            try:
-                url = src.get("url", "")
-                if url:
-                    content = self.fetch_jina_markdown(url, timeout=10)
-                    if len(content) > 100:
-                        # Extract product keywords from the page
-                        lines = content.split("\n")
-                        for line in lines[:50]:
-                            # Look for product-like phrases (capitalized, 3+ words)
-                            words = line.strip()
-                            if 15 < len(words) < 80 and sum(1 for c in words if c.isupper()) >= 2:
-                                cleaned = re.sub(r'[#*\[\]()]', '', words).strip()
-                                if len(cleaned.split()) >= 3:
-                                    all_signals.append({
-                                        "platform": "discovered_web",
-                                        "keyword": cleaned[:60].strip().title(),
-                                        "trend_category": "Web Discovery",
-                                        "region": region,
-                                        "velocity_score": 65.0,
-                                        "longevity_days": 21,
-                                        "search_volume_est": 3000,
-                                        "raw_json": {"source_url": url, "source_id": src.get("source_id")}
-                                    })
+                    url = src.get("url", "")
+                    if url:
+                        content = self.fetch_jina_markdown(url, timeout=10)
+                        if len(content) > 100:
+                            # Extract product keywords from the page
+                            lines = content.split("\n")
+                            for line in lines[:50]:
+                                # Look for product-like phrases (capitalized, 3+ words)
+                                words = line.strip()
+                                if 15 < len(words) < 80 and sum(1 for c in words if c.isupper()) >= 2:
+                                    cleaned = re.sub(r'[#*\[\]()]', '', words).strip()
+                                    if len(cleaned.split()) >= 3:
+                                        all_signals.append({
+                                            "platform": "discovered_web",
+                                            "keyword": cleaned[:60].strip().title(),
+                                            "trend_category": "Web Discovery",
+                                            "region": region,
+                                            "velocity_score": 65.0,
+                                            "longevity_days": 21,
+                                            "search_volume_est": 3000,
+                                            "raw_json": {"source_url": url, "source_id": src.get("source_id")}
+                                        })
                         update_source_usage(src["source_id"], yielded_results=True)
-            except Exception as e:
-                logger.debug(f"Discovered source scrape failed: {e}")
+                except Exception as e:
+                    logger.debug(f"Discovered source scrape failed: {e}")
 
-        # ── 4. Deduplicate & Record to DB ────────────────────────────────────
-        recorded_signals = []
-        seen_kws = set()
+            # ── 4. Deduplicate & Record to DB ────────────────────────────────────
+            recorded_signals = []
+            seen_kws = set()
 
-        for sig in all_signals:
-            kw_norm = sig["keyword"].lower().strip()
-            if kw_norm not in seen_kws and len(kw_norm) > 4:
-                seen_kws.add(kw_norm)
-                sig_id = record_trend_signal(
-                    platform=sig["platform"],
-                    keyword=sig["keyword"],
-                    category=sig.get("trend_category", "General"),
-                    region=sig["region"],
-                    search_volume_est=sig.get("search_volume_est", 5000),
-                    velocity_score=sig.get("velocity_score", 75.0),
-                    longevity_days=sig.get("longevity_days", 14),
-                    raw_json=sig.get("raw_json", {})
-                )
-                sig["signal_id"] = sig_id
-                recorded_signals.append(sig)
-
-                # ── Feed discovered keywords back as new seeds ───────────
-                try:
-                    record_seed_keyword(
+            for sig in all_signals:
+                kw_norm = sig["keyword"].lower().strip()
+                if kw_norm not in seen_kws and len(kw_norm) > 4:
+                    seen_kws.add(kw_norm)
+                    sig_id = record_trend_signal(
+                        platform=sig["platform"],
                         keyword=sig["keyword"],
+                        category=sig.get("trend_category", "General"),
                         region=sig["region"],
-                        source_platform=sig["platform"],
-                        velocity_score=sig.get("velocity_score", 50.0)
+                        search_volume_est=sig.get("search_volume_est", 5000),
+                        velocity_score=sig.get("velocity_score", 75.0),
+                        longevity_days=sig.get("longevity_days", 14),
+                        raw_json=sig.get("raw_json", {})
                     )
-                except Exception:
-                    pass
+                    sig["signal_id"] = sig_id
+                    recorded_signals.append(sig)
 
-            if len(recorded_signals) >= max_signals:
-                break
+                    # ── Feed discovered keywords back as new seeds ───────────
+                    try:
+                        record_seed_keyword(
+                            keyword=sig["keyword"],
+                            region=sig["region"],
+                            source_platform=sig["platform"],
+                            velocity_score=sig.get("velocity_score", 50.0)
+                        )
+                    except Exception:
+                        pass
 
-        logger.info(f"OpenWebTrendScout: Harvested {len(recorded_signals)} signals for {region} (dynamic sources)")
-        return recorded_signals
+                if len(recorded_signals) >= max_signals:
+                    break
+
+            # Set collected data for AI Supervisor validation
+            task.data_collected = {"trends": recorded_signals, "region": region}
+
+            logger.info(f"OpenWebTrendScout: Harvested {len(recorded_signals)} signals for {region} (AI Supervised)")
+            return recorded_signals
 
 
 if __name__ == "__main__":
