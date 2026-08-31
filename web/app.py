@@ -963,7 +963,18 @@ if tab_db_explorer:
             st.info(f"No records found in table `{sel_table}` matching query.")
         else:
             df_table = pd.DataFrame(raw_records)
-            st.markdown(f"**Table: `{sel_table}` — {len(df_table)} records shown (active only):**")
+            
+            # Add "Show AI-Rejected" toggle for master_products
+            if sel_table == "master_products":
+                show_deleted = st.checkbox("🔴 Show AI-Rejected (Soft-Deleted)", value=False, key="show_deleted_master")
+                if show_deleted:
+                    st.markdown(f"**Table: `{sel_table}` — {len(df_table)} records shown (including AI-rejected):**")
+                else:
+                    df_table = df_table[df_table.get("is_deleted", 0) == 0]
+                    st.markdown(f"**Table: `{sel_table}` — {len(df_table)} records shown (active only):**")
+            else:
+                st.markdown(f"**Table: `{sel_table}` — {len(df_table)} records shown:**")
+            
             st.dataframe(df_table, use_container_width=True)
 
             csv_data = df_table.to_csv(index=False).encode("utf-8")

@@ -217,94 +217,104 @@ RETURN: Final JSON array of ALL products from ALL pages scraped.
 """
         return task
     
-    async def _run_scraper(self, config: Dict, query: str, max_pages: int = 3) -> List[ScrapedProduct]:
-        """Run the browser-use agent, or fall back to high-performance curl_cffi direct scraper."""
-        try:
-            from browser_use import Agent, Browser
-            from browser_use.llm import ChatOpenAI, ChatAnthropic, ChatGoogle
-            import os
-            
-            # Initialize LLM - use available provider
-            llm = None
-            if os.getenv("BROWSER_USE_API_KEY"):
-                from browser_use import ChatBrowserUse
-                llm = ChatBrowserUse()
-            elif os.getenv("OPENAI_API_KEY"):
-                llm = ChatOpenAI(model="gpt-4o-mini")
-            elif os.getenv("ANTHROPIC_API_KEY"):
-                llm = ChatAnthropic(model="claude-3-5-haiku-20241022")
-            elif os.getenv("GOOGLE_API_KEY"):
-                llm = ChatGoogle(model="gemini-1.5-flash")
-            else:
+async def _run_scraper(self, config: Dict, query: str, max_pages: int = 3) -> List[ScrapedProduct]:
+        """Run the browser-use agent, or fall back to high-performance curl_cffi direct scraper.
+        All outputs are validated by AI Supervisor."""
+        # Register this scrape task with AI Supervisor
+        supervisor = get_supervisor()
+        task_id = supervisor.register_task("scrape", f"scrape_{config['marketplace_name']}_{query}", 
+                                          marketplace=config["marketplace_name"], region=config["region"])
+        
+        with supervisor.supervise(task_id) as task:
+            try:
+                from browser_use import Agent, Browser
+                from browser_use.llm import ChatOpenAI, ChatAnthropic, ChatGoogle
+                import os
+                
+                # Initialize LLM - use available provider
+                llm = None
+                if os.getenv("BROWSER_USE_API_KEY"):
+                    from browser_use import ChatBrowserUse
+                    llm = ChatBrowserUse()
+                elif os.getenv("OPENAI_API_KEY"):
+                    llm = ChatOpenAI(model="gpt-4o-mini")
+                elif os.getenv("ANTHROPIC_API_KEY"):
+                    llm = ChatAnthropic(model="claude-3-5-haiku-20241022")
+                elif os.getenv("GOOGLE_API_KEY"):
+                    llm = ChatGoogle(model="gemini-1.5-flash")
+                else:
+                    return self._direct_curl_scrape(config, query, max_pages)
+                
+                browser = self._build_browser_config()
+                task_prompt = self._build_agent_task(config, query, max_pages)
+                
+                logger.info(f"Starting browser-use scrape: {config['marketplace_name']} | {query}")
+                agent = Agent(
+                    task=task_prompt,
+                    llm=llm,
+                    browser=browser,
+                    max_actions_per_step=5,
+                    max_failures=3,
+                    step_timeout=180,
+                    use_vision=True,
+                    include_attributes=["href", "src", "alt", "title", "aria-label", "data-*"]
+                )
+            except (ImportError, Exception) as ie:
+                logger.info(f"Using direct TLS curl_cffi scraper for {config['marketplace_name']} ({ie})")
                 return self._direct_curl_scrape(config, query, max_pages)
             
-            browser = self._build_browser_config()
-            task = self._build_agent_task(config, query, max_pages)
+            try:
+                history = await agent.run()
+                
+                # Extract final result from agent history
+                final_result = history.final_result()
+                if not final_result:
+                    logger.warning(f"No final result from agent for {config['marketplace_name']}")
+                    return []
+                
+                # Parse the JSON result
+                products_data = self._parse_agent_result(final_result)
+                
+                # Convert to ScrapedProduct objects
+                products = []
+                for p in products_data:
+                    try:
+                        product = ScrapedProduct(
+                            marketplace=config["marketplace_name"],
+                            region=config["region"],
+                            search_query=query,
+                            title=p.get("title", ""),
+                            price=p.get("price"),
+                            currency=p.get("currency", "INR" if config["region"] == "India" else "USD"),
+                            original_price=p.get("original_price"),
+                            discount_pct=p.get("discount_pct"),
+                            rating=p.get("rating"),
+                            review_count=p.get("review_count", 0),
+                            availability=p.get("availability", "unknown"),
+                            product_url=p.get("product_url", ""),
+                            image_url=p.get("image_url", ""),
+                            seller_name=p.get("seller_name", ""),
+                            seller_rating=p.get("seller_rating"),
+                            raw_data=p
+                        )
+                        products.append(product)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse product: {e}")
+                        continue
+                
+                # Set data for AI Supervisor validation
+                task.data_collected = {"products": products, "marketplace": config["marketplace_name"], "region": config["region"], "query": query}
+                
+                logger.info(f"Scraped {len(products)} products from {config['marketplace_name']} for '{query}' (AI Supervised)")
+                return products
             
-            logger.info(f"Starting browser-use scrape: {config['marketplace_name']} | {query}")
-            agent = Agent(
-                task=task,
-                llm=llm,
-                browser=browser,
-                max_actions_per_step=5,
-                max_failures=3,
-                step_timeout=180,
-                use_vision=True,
-                include_attributes=["href", "src", "alt", "title", "aria-label", "data-*"]
-            )
-        except (ImportError, Exception) as ie:
-            logger.info(f"Using direct TLS curl_cffi scraper for {config['marketplace_name']} ({ie})")
-            return self._direct_curl_scrape(config, query, max_pages)
-        
-        try:
-            history = await agent.run()
-            
-            # Extract final result from agent history
-            final_result = history.final_result()
-            if not final_result:
-                logger.warning(f"No final result from agent for {config['marketplace_name']}")
-                return []
-            
-            # Parse the JSON result
-            products_data = self._parse_agent_result(final_result)
-            
-            # Convert to ScrapedProduct objects
-            products = []
-            for p in products_data:
-                try:
-                    product = ScrapedProduct(
-                        marketplace=config["marketplace_name"],
-                        region=config["region"],
-                        search_query=query,
-                        title=p.get("title", ""),
-                        price=p.get("price"),
-                        currency=p.get("currency", "INR" if config["region"] == "India" else "USD"),
-                        original_price=p.get("original_price"),
-                        discount_pct=p.get("discount_pct"),
-                        rating=p.get("rating"),
-                        review_count=p.get("review_count", 0),
-                        availability=p.get("availability", "unknown"),
-                        product_url=p.get("product_url", ""),
-                        image_url=p.get("image_url", ""),
-                        seller_name=p.get("seller_name", ""),
-                        seller_rating=p.get("seller_rating"),
-                        raw_data=p
-                    )
-                    products.append(product)
-                except Exception as e:
-                    logger.warning(f"Failed to parse product: {e}")
-                    continue
-            
-            logger.info(f"Scraped {len(products)} products from {config['marketplace_name']} for '{query}'")
-            return products
-            
-        except Exception as e:
-            logger.error(f"Universal scrape failed for {config['marketplace_name']}: {e}", exc_info=True)
-            raise
-        finally:
-            if browser and not self.use_cloud:
-                await browser.close()
-    
+            except Exception as e:
+                logger.error(f"Universal scrape failed for {config['marketplace_name']}: {e}", exc_info=True)
+                raise
+            finally:
+                if browser and not self.use_cloud:
+                    await browser.close()
+
     def _parse_agent_result(self, result: str) -> List[Dict]:
         """Parse agent result into list of product dicts."""
         try:
@@ -462,40 +472,51 @@ RETURN: Final JSON array of ALL products from ALL pages scraped.
         return products
     
     async def scrape_all_marketplaces(self, region: str, query: str, max_pages: int = 3) -> Dict[str, List[ScrapedProduct]]:
-        """Scrape all active marketplaces for a region in parallel."""
+        """Scrape all active marketplaces for a region in parallel.
+        All outputs are validated by AI Supervisor for quality assurance."""
         configs = get_marketplace_configs(region=region, active_only=True)
         
         if not configs:
             logger.warning(f"No active marketplace configs for region: {region}")
             return {}
         
-        # Run scrapes in parallel
-        tasks = []
-        for config in configs:
-            task = self._run_scraper(config, query, max_pages)
-            tasks.append((config["marketplace_name"], task))
+        # Register with AI Supervisor for active monitoring
+        supervisor = get_supervisor()
+        task_id = supervisor.register_task("scrape", f"universal_scrape_{query}", marketplace="multi", region=region)
         
-        results = {}
-        for marketplace_name, task in tasks:
-            try:
-                products = await task
-                results[marketplace_name] = products
-                
-                # Store in database
-                config = next(c for c in configs if c["marketplace_name"] == marketplace_name)
-                config_id = config["config_id"]
-                success = len(products) > 0
-                for product in products:
-                    record_scraped_listing(config_id, product.to_dict())
-                update_marketplace_config_stats(config_id, success)
-                
-            except Exception as e:
-                logger.error(f"Failed to scrape {marketplace_name}: {e}")
-                results[marketplace_name] = []
-        
-        total = sum(len(p) for p in results.values())
-        logger.info(f"Universal scrape complete for '{query}' in {region}: {total} products from {len(results)} marketplaces")
-        return results
+        with supervisor.supervise(task_id) as task:
+            # Run scrapes in parallel
+            tasks = []
+            for config in configs:
+                task = self._run_scraper(config, query, max_pages)
+                tasks.append((config["marketplace_name"], task))
+            
+            results = {}
+            all_products = []
+            for marketplace_name, task in tasks:
+                try:
+                    products = await task
+                    results[marketplace_name] = products
+                    all_products.extend(products)
+                    
+                    # Store in database
+                    config = next(c for c in configs if c["marketplace_name"] == marketplace_name)
+                    config_id = config["config_id"]
+                    success = len(products) > 0
+                    for product in products:
+                        record_scraped_listing(config_id, product.to_dict())
+                    update_marketplace_config_stats(config_id, success)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to scrape {marketplace_name}: {e}")
+                    results[marketplace_name] = []
+            
+            # Set collected data for AI Supervisor validation
+            task.data_collected = {"products": all_products, "marketplaces": list(results.keys()), "query": query, "region": region}
+            
+            total = sum(len(p) for p in results.values())
+            logger.info(f"Universal scrape complete for '{query}' in {region}: {total} products from {len(results)} marketplaces (AI Supervised)")
+            return results
     
     async def discover_and_scrape(self, trend_keywords: List[str], region: str, max_pages: int = 2) -> Dict[str, List[ScrapedProduct]]:
         """Discover products for multiple trend keywords across all marketplaces."""
