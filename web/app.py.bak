@@ -1,0 +1,103 @@
+csv_table_data = df_table.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label=f"📥 Download `{sel_table}` as CSV",
+                data=csv_table_data,
+                file_name=f"{sel_table}_{datetime.date.today().isoformat()}.csv",
+                mime="text/csv",
+                use_container_width=False
+            )
+
+# -------------------------------------------------------------
+# TAB 8: ARCHIVE — AI Rejected Products with Rejection Reasons
+# -------------------------------------------------------------
+if tab_archive:
+    st.subheader("🗃️ Archive — AI Rejected Products with Rejection Reasons")
+    st.caption("Products auto soft-deleted by AI Supervisor validation. Each entry shows the AI rejection reason and reasoning.")
+    
+    # Get archived products with AI rejection reasons
+    supervisor = get_supervisor()
+    archived_products = supervisor.get_archive_view(limit=200)
+    
+    if not archived_products:
+        st.info("No archived products yet. AI Supervisor will auto soft-delete invalid scraped findings with AI rejection reasons.")
+    else:
+        # Summary metrics
+        total_archived = len(archived_products)
+        high_confidence = len([p for p in archived_products if p.get("ai_confidence", 0) >= 80])
+        categories = {}
+        for p in archived_products:
+            cat = p.get("ai_rejection_category", "unknown")
+            categories[cat] = categories.get(cat, 0) + 1
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Archived", total_archived)
+        with col2:
+            st.metric("High Confidence Rejections", high_confidence)
+        with col3:
+            st.metric("Rejection Categories", len(categories))
+        with col4:
+            restored_count = len([p for p in archived_products if p.get("is_deleted") == 0])
+            st.metric("Restored This Session", restored_count)
+        
+        # Category breakdown
+        with st.expander("📊 Rejection Category Breakdown", expanded=False):
+            for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True):
+                st.write(f"• **{cat}**: {count} products")
+        
+        st.markdown("---")
+        
+        # Archive table with AI rejection reasons
+        for p in archived_products:
+            pid = p["product_id"]
+            
+            with st.container():
+                col1, col2, col4, col5, col6 = st.columns([0.4, 2.0, 1.2, 1.0, 1.0])
+                
+                with col1:
+                    st.caption(f"#{pid}")
+                with col2:
+                    st.markdown(f"**{p['name'][:40]}**")
+                    st.caption(f"Category: {p.get('category', 'N/A')} | Region: {p['region']}")
+                with col4:
+                    # AI Rejection Category with color coding
+                    cat = p.get("ai_rejection_category", "unknown")
+                    cat_colors = {
+                        "missing_data": "#EF4444",
+                        "invalid_price": "#F97316", 
+                        "invalid_url": "#F59E0B",
+                        "unrealistic_data": "#8B5CF6",
+                        "duplicate": "#EC4899",
+                        "marketplace_mismatch": "#06B6D4",
+                        "fake_data": "#DC2626",
+                        "validation_error": "#64748B",
+                        "manual": "#6B7280"
+                    }
+                    color = cat_colors.get(cat, "#64748B")
+                    st.markdown(f'<span style="background:{color};color:white;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:600;">{cat.upper()}</span>', unsafe_allow_html=True)
+                with col5:
+                    # AI Rejection Reason
+                    reason = p.get("ai_rejection_reason", "No reason recorded")
+                    conf = p.get("ai_confidence", 0)
+                    st.caption(f"Confidence: {conf}%")
+                    with st.popover("📝 AI Rejection Reason", use_container_width=False):
+                        st.markdown(f"**Product:** {p['name']}")
+                        st.markdown(f"**Category:** {p.get('ai_rejection_category', 'unknown')}")
+                        st.markdown(f"**Confidence:** {p.get('ai_confidence', 0)}%")
+                        st.markdown("**AI Reasoning:**")
+                        st.info(p.get("ai_reasoning", "No AI reasoning recorded"))
+                        st.markdown("**Rejection Reason:**")
+                        st.error(reason)
+                        
+                        # Restore button
+                        if st.button("♻️ Restore Product", key=f"restore_archive_{pid}", type="primary", use_container_width=True):
+                            restore_product(pid)
+                            st.toast(f"Product {pid} restored!", icon="♻️")
+                            st.rerun()
+                with col6:
+                    # Quick actions
+                    if st.button("🔍 View Details", key=f"view_archive_{pid}", use_container_width=True):
+                        st.session_state["active_tab"] = "opps"
+                        st.rerun()
+            
+            st.markdown("<hr style='margin:4px 0; border:0.5px solid #F1F5F9;'>", unsafe_allow_html=True)

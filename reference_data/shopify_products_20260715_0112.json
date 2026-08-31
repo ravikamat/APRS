@@ -1,0 +1,54 @@
+{
+  "products": [
+    {
+      "product": {
+        "title": "Ergonomic Memory Foam Seat Cushion",
+        "body_html": "",
+        "vendor": "ECO Store",
+        "product_type": "Office",
+        "tags": [
+          "Office"
+        ],
+        "variants": [
+          {
+            "sku": "SHP-WKJBFS9B",
+            "price": "1499",
+            "compare_at_price": "1949",
+            "inventory_quantity": 50,
+            "weight": 0.5,
+            "weight_unit": "kg",
+            "requires_shipping": true,
+            "taxable": true
+          }
+        ],
+        "images": [],
+        "metafields": [
+          {
+            "namespace": "eco",
+            "key": "hsn",
+            "value": "",
+            "type": "single_line_text_field"
+          },
+          {
+            "namespace": "eco",
+            "key": "gst_rate",
+            "value": "18",
+            "type": "number_integer"
+          },
+          {
+            "namespace": "eco",
+            "key": "supplier",
+            "value": "",
+            "type": "single_line_text_field"
+          },
+          {
+            "namespace": "eco",
+            "key": "moq",
+            "value": "50",
+            "type": "number_integer"
+          }
+        ]
+      }
+    }
+  ]
+}

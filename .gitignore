@@ -1,0 +1,77 @@
+# APRS V6 Pro - Git Ignore
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.db.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.tox/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+*.out
+
+# Generated files
+*.xlsx
+*.docx
+*.pdf
+*.csv
+exports/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Browser-use
+browser-use/
+!tools/browser-use/
+
+# Trade directory (external tools)
+trade/
+
+# Large model files
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Coverage reports
+htmlcov/
+.coverage.*
+
+# Type checking
+*.pyc
+*.pyo
+*.pyd
