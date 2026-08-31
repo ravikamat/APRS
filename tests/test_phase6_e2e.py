@@ -57,10 +57,9 @@ class TestPhase6E2E(unittest.TestCase):
         
         orch.amazon_scraper = mock_scraper_instance
         orch.keepa = mock_k
-        
-# Mock AI Supervisor to always return valid for test products
-        from tools.ai_supervisor import get_supervisor, LLMRouter
-        from models.llm_router import LLMResponse, LLMProvider
+        # Mock AI Supervisor to always return valid for test products
+        from tools.ai_supervisor import get_supervisor
+        from models.llm_router import LLMRouter, LLMResponse, LLMProvider
         from unittest.mock import AsyncMock
         
         supervisor = get_supervisor()
