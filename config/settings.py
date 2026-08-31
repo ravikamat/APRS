@@ -18,46 +18,46 @@ NIM_API_KEYS = [
 ]
 NIM_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# ── NIM Model Matrix (verified active endpoints on NVIDIA NIM catalog) ─────
+# ── NIM Model Matrix (configured for Nemotron 3 Ultra 550B flagship) ─────────
 NIM_MODELS = {
-    "deep_reasoning":        "nvidia/nemotron-3-super-120b-a12b",
-    "ultra_reasoning":       "nvidia/nemotron-3-super-120b-a12b",
-    "long_context_synthesis": "nvidia/nemotron-3-super-120b-a12b",
-    "fast_triage":           "nvidia/nemotron-3-nano-30b-a3b",
-    "vision_multimodal":     "meta/llama-3.2-90b-vision-instruct",
-    "adversarial_critic":    "nvidia/nemotron-3-super-120b-a12b",
+    "deep_reasoning":        "nvidia/nemotron-3-ultra-550b-a55b",
+    "ultra_reasoning":       "nvidia/nemotron-3-ultra-550b-a55b",
+    "long_context_synthesis": "nvidia/nemotron-3-ultra-550b-a55b",
+    "fast_triage":           "nvidia/nemotron-3-ultra-550b-a55b",
+    "vision_multimodal":     "meta/llama-3.2-90b-vision-instruct",  # Specialized vision multimodal tasks
+    "adversarial_critic":    "nvidia/nemotron-3-ultra-550b-a55b",
     # Nemotron specialized swarm roles
-    "nemotron_scout":        "nvidia/nemotron-3-super-120b-a12b",
-    "nemotron_arbiter":      "nvidia/nemotron-3-ultra-550b-a55b",  # Nemotron 3 Ultra 550B for final verdict
+    "nemotron_scout":        "nvidia/nemotron-3-ultra-550b-a55b",
+    "nemotron_arbiter":      "nvidia/nemotron-3-ultra-550b-a55b",
     "nemotron_ultra":        "nvidia/nemotron-3-ultra-550b-a55b",
 }
 
 # ── Swarm Agent Role Matrix ───────────────────────────────────────────────
 SWARM_ROLES = {
     "trend_scout": {
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b",
         "task_type": "nemotron_scout",
-        "system_prompt": "You are the Lead Open-Web Trend Scout. Identify emerging high-velocity viral products and evaluate 7-30 day search momentum."
+        "system_prompt": "You are the Lead Open-Web Trend Scout powered by Nemotron 3 Ultra. Identify emerging high-velocity viral products and evaluate 7-30 day search momentum."
     },
     "marketplace_harvester": {
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b",
         "task_type": "ultra_reasoning",
-        "system_prompt": "You are the Multi-Marketplace Catalog Harvester. Match trend signals to active high-velocity listings on Amazon, Flipkart, Meesho, and Shopify."
+        "system_prompt": "You are the Multi-Marketplace Catalog Harvester powered by Nemotron 3 Ultra. Match trend signals to active high-velocity listings on Amazon, Flipkart, Meesho, and Shopify."
     },
     "defect_analyst": {
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b",
         "task_type": "deep_reasoning",
-        "system_prompt": "You are the Chief Quality Engineer & Defect Miner. Synthesize multi-source 3-star reviews into structural BOM upgrades."
+        "system_prompt": "You are the Chief Quality Engineer & Defect Miner powered by Nemotron 3 Ultra. Synthesize multi-source 3-star reviews into structural BOM upgrades."
     },
     "economics_auditor": {
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b",
         "task_type": "long_context_synthesis",
-        "system_prompt": "You are the 15-Factor Unit Economics Lead. Validate landed COGS, RTO reserves, FBA fees, and stress resilience."
+        "system_prompt": "You are the 15-Factor Unit Economics Lead powered by Nemotron 3 Ultra. Validate landed COGS, RTO reserves, FBA fees, and stress resilience."
     },
     "chief_arbiter": {
         "model": "nvidia/nemotron-3-ultra-550b-a55b",
-        "task_type": "adversarial_critic",
-        "system_prompt": "You are the Supreme Investment Arbiter. Issue final consensus verdicts and flag false-positive backtrack alerts."
+        "task_type": "nemotron_arbiter",
+        "system_prompt": "You are the Supreme Investment Arbiter powered by Nemotron 3 Ultra. Issue final consensus verdicts and flag false-positive backtrack alerts."
     }
 }
 

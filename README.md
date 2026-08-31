@@ -7,12 +7,12 @@
 ## 🌟 Key Highlights in V6 Pro
 
 - **🧠 Active AI Supervisor**: Real-time supervision, data quality validation, automatic anomaly soft-deletion with written rejection rationales, and runtime learning adjustments.
-- **🤖 5-Agent Swarm + Supreme Arbiter**: Parallel multi-agent assessment with specialized roles:
-  1. *Trend Scout (Nemotron-30B)*
-  2. *Marketplace Analyst (Nemotron-120B)*
-  3. *Defect & Quality Engineer (Nemotron-120B)*
-  4. *Sourcing & Supply Chain Hunter (Nemotron-30B)*
-  5. *15-Factor Unit Economics Arbiter (Nemotron-120B)*
+- **🤖 5-Agent Swarm + Supreme Arbiter**: Parallel multi-agent assessment powered by **NVIDIA Nemotron 3 Ultra 550B** (`nvidia/nemotron-3-ultra-550b-a55b`):
+  1. *Trend Scout (Nemotron-3-Ultra-550B)*
+  2. *Marketplace Analyst (Nemotron-3-Ultra-550B)*
+  3. *Defect & Quality Engineer (Nemotron-3-Ultra-550B)*
+  4. *Sourcing & Supply Chain Hunter (Nemotron-3-Ultra-550B)*
+  5. *15-Factor Unit Economics Arbiter (Nemotron-3-Ultra-550B)*
 - **📊 Comprehensive 15-Factor Economics Engine**: Full landed COGS, mold tooling amortization, payment gateway fees, RTO/return reserves, GST/VAT, transit inventory carrying costs, and 3-scenario Monte Carlo simulations (*Conservative*, *Expected*, *Upside*).
 - **🌐 Universal Data-Driven Scraper**: Multi-platform scraping (`Amazon`, `Flipkart`, `Meesho`, `Myntra`, `Shopify`, `Jina Reader`) using `curl_cffi` TLS fingerprint impersonation.
 - **🔍 Self-Expanding Search Discovery**: Autonomous discovery of new niche categories, viral product sources, and high-intent seed keywords without hardcoded limits.
@@ -99,12 +99,12 @@ graph LR
 ---
 
 ## 🤖 Active AI Models (NVIDIA NIM)
-
+ 
 | Role | Model Identifier | Purpose |
 |---|---|---|
-| **Lead Arbiter & Consensus** | `nvidia/nemotron-3-super-120b-a12b` | 120B reasoning, gate decisions, adversarial debate |
-| **Fast Scout & Harvester** | `nvidia/nemotron-3-nano-30b-a3b` | 30B high-throughput trend parsing & niche discovery |
+| **Supreme Arbiter & Swarm Intelligence** | `nvidia/nemotron-3-ultra-550b-a55b` | 550B flagship reasoning, gate decisions, adversarial debate, 15-factor economics |
 | **Vision Packaging Agent** | `meta/llama-3.2-90b-vision-instruct` | Multimodal visual QC and packaging defect analysis |
+| **Local Offline Fallback** | `qwen27b_iq1` (Ollama) | Ultra-compact 27B quantized GGUF running in system RAM |
 
 ---
 

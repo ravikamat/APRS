@@ -158,6 +158,30 @@ except Exception as _se:
     _sup_status = {"supervision_active": False, "active_tasks": 0, "completed_tasks": 0,
                    "total_validations": 0, "total_improvements": 0, "monitoring_active": False}
 
+# ── Till-Date Metrics ──────────────────────────────────────────────────
+@st.cache_data(ttl=30)
+def get_till_date_metrics():
+    """Get cumulative metrics for nav bar display."""
+    products = get_all_products(include_deleted=False)
+    niches = get_dynamic_niches(active_only=True, limit=1000)
+    trend_sources = get_discovered_sources(source_type="trend", active_only=True)
+    review_sources = get_discovered_sources(source_type="community_reddit", active_only=True)
+    marketplace_sources = get_discovered_sources(source_type="marketplace", active_only=True)
+    seed_keywords = get_seed_keywords(active_only=True, limit=1000)
+    
+    return {
+        "total_products": len(products),
+        "total_niches": len(niches),
+        "trend_websites": len(trend_sources),
+        "review_websites": len(review_sources),
+        "marketplace_websites": len(marketplace_sources),
+        "seed_keywords": len(seed_keywords),
+        "shortlisted": len([p for p in products if p.get("is_shortlisted") == 1]),
+        "passed_products": len([p for p in products if (p.get("human_override_status") or p.get("status")) == "PASS"]),
+    }
+
+metrics = get_till_date_metrics()
+
 # ── NIM Cluster Status ────────────────────────────────────────────────────────
 nim_cluster = SupremeNIMCluster()
 cluster_status = nim_cluster.get_cluster_status()
@@ -252,9 +276,9 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 🤖 Active Swarm Models")
-    st.markdown("- **Lead Arbiter (120B)**: `nvidia/nemotron-3-super-120b-a12b`")
-    st.markdown("- **Fast Scout (30B)**: `nvidia/nemotron-3-nano-30b-a3b`")
+    st.markdown("- **Flagship Swarm (550B)**: `nvidia/nemotron-3-ultra-550b-a55b`")
     st.markdown("- **Vision Agent**: `meta/llama-3.2-90b-vision-instruct`")
+    st.markdown("- **Local Offline GGUF**: `qwen27b_iq1` via Ollama")
 
     st.divider()
     st.markdown("### 🧠 AI Supervisor Status")
@@ -435,6 +459,9 @@ if tab_opps:
                 with c2:
                     st.markdown("**Gate Progress:**")
                     gate_row = ""
+                    # get_gate_status returns a list of dicts, convert to dict for easy access
+                    gate_status_list = get_gate_status(pid)
+                    gate_statuses = {gs["gate_number"]: gs for gs in gate_status_list}
                     for g in range(1, 7):
                         gs = gate_statuses.get(g, {})
                         g_status = gs.get("status", "PENDING")

@@ -634,7 +634,7 @@ def is_duplicate_product(product_id: str, marketplace_url: str) -> bool:
     conn.close()
     return exists
 
-def record_product_evaluation(prod_dict: dict, eval_dict: dict, model_name: str = "Nemotron-120B") -> bool:
+def record_product_evaluation(prod_dict: dict, eval_dict: dict, model_name: str = "Nemotron-3-Ultra-550B") -> bool:
     """Inserts or updates a validated product dossier into the SSOT database."""
     if not eval_dict:
         raise ValueError("eval_dict cannot be empty. Gate 3 must produce real economics before DB write.")
