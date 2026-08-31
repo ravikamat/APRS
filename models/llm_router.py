@@ -24,7 +24,7 @@ if str(_ROOT) not in sys.path:
 
 from config.settings import (
     NIM_API_KEYS, NIM_BASE_URL, NIM_MODELS, SWARM_ROLES,
-    LOCAL_GGUF_CONFIG, LOCAL_HEAVY_MODELS
+    LOCAL_OLLAMA_CONFIG, LOCAL_GGUF_CONFIG
 )
 from models.nim_cluster import SupremeNIMCluster, NIMClusterExhausted
 

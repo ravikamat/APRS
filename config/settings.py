@@ -62,20 +62,15 @@ SWARM_ROLES = {
 }
 
 # ── Local GGUF Model Paths (loaded from .env; None if not configured) ──────
-LOCAL_HEAVY_MODELS = {
-    "qwen_27b_gguf":   os.getenv("LOCAL_QWEN_27B_PATH", r"F:\Yuki_1.0\data\models\Qwen3.8-27B-UD-IQ1_S.gguf"),
-    "qwen_0_5b_gguf":  os.getenv("LOCAL_QWEN_05B_PATH", r"F:\Yuki_1.0\data\models\qwen2.5-0.5b-instruct-q4_k_m.gguf"),
-    "kimi_k3_gguf":    os.getenv("LOCAL_KIMI_K3_PATH", r"H:\trade\kimi-k3-in-c"),
-}
-
-# ── Local Offline GGUF Configuration (Ollama / llama.cpp / LM Studio) ─────
-LOCAL_GGUF_CONFIG = {
+# ── Local Offline LLM Configuration (Ollama / Local API Server) ───────────
+LOCAL_OLLAMA_CONFIG = {
     "ollama_url":     os.getenv("OLLAMA_URL", "http://localhost:11434"),
-    "default_model":  os.getenv("LOCAL_QWEN_27B_MODEL", "qwen2.5:27b-instruct-q4_K_M"),
-    "fallback_model": os.getenv("LOCAL_FALLBACK_MODEL", "phi3:3.8b"),
+    "default_model":  os.getenv("LOCAL_OLLAMA_MODEL", "qwen2.5:14b"),
+    "fallback_model": os.getenv("LOCAL_FALLBACK_MODEL", "llama3.1:8b"),
     "context_window": 8192,
     "temperature":    0.2,
 }
+LOCAL_GGUF_CONFIG = LOCAL_OLLAMA_CONFIG  # Backward compatibility alias
 
 # ── LLM Routing Configuration (NIM primary → Local fallback) ───────────────
 # Format: "task_type:provider1,provider2;task_type:provider1"
