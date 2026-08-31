@@ -58,12 +58,14 @@ class TestPhase6E2E(unittest.TestCase):
         orch.amazon_scraper = mock_scraper_instance
         orch.keepa = mock_k
         
-        # Mock AI Supervisor to always return valid for test products
+# Mock AI Supervisor to always return valid for test products
         from tools.ai_supervisor import get_supervisor, LLMRouter
         from models.llm_router import LLMResponse, LLMProvider
         from unittest.mock import AsyncMock
         
         supervisor = get_supervisor()
+        
+        # Mock LLMRouter.query
         with patch.object(LLMRouter, 'query', new_callable=AsyncMock) as mock_query:
             call_count = {"count": 0}
             
@@ -103,9 +105,9 @@ class TestPhase6E2E(unittest.TestCase):
             mock_query.side_effect = mock_query_side_effect
             
             # Also mock the batch validation to return all valid
-with patch.object(supervisor, 'validate_products_batch', return_value={"valid": 1, "invalid": 0, "auto_deleted": 0}):
-            # Step 1: Discover - should block at Gate 2
-            result = orch.discover_and_evaluate_products(region="USA", category="Kitchen Storage", max_candidates=1)
+            with patch.object(supervisor, 'validate_products_batch', return_value={"valid": 1, "invalid": 0, "auto_deleted": 0}):
+                # Step 1: Discover - should block at Gate 2
+                result = orch.discover_and_evaluate_products(region="USA", category="Kitchen Storage", max_candidates=1)
             
             self.assertTrue(len(result) > 0)
             self.assertEqual(result[0]["status"], "BLOCKED_AT_GATE_2")
