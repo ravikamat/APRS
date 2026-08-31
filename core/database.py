@@ -684,7 +684,7 @@ def record_product_evaluation(prod_dict: dict, eval_dict: dict, model_name: str 
                 first_discovered_date, last_evaluated_date, updated_at,
                 -- AI Supervision columns
                 ai_rejection_reason, ai_reasoning, ai_rejection_category, ai_confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
             ON CONFLICT(product_id) DO UPDATE SET
                 name=excluded.name,
                 planned_msrp=excluded.planned_msrp,

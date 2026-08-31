@@ -376,150 +376,150 @@ class AutonomousProductResearchOrchestrator:
             evaluated_products = []
             
             for item in live_listings:
-            asin = item["asin"]
-            title = item["title"]
-            raw_price = item.get("price")
-            canon_region = normalize_region(region)
-            is_india = (canon_region == "India")
-            try:
-                live_msrp = float(raw_price) if (raw_price is not None and float(raw_price) > 0) else (499.0 if is_india else 24.99)
-            except (ValueError, TypeError):
-                live_msrp = 499.0 if is_india else 24.99
-            product_id = f"{region[:2].upper()}_{asin[:6].upper()}"
-            
-            # GATE 1: Signal Discovery (Automated via Keepa or Live Scraper Fallback)
-            gate1_result = self._run_gate_1_signal_discovery(asin, region, clean_cat, item_metadata=item)
-            if not gate1_result["success"]:
-                if gate1_result.get("blocked"):
-                    print(f"[ORCHESTRATOR] Product {product_id} blocked at Gate 1: {gate1_result['error']}")
+                asin = item["asin"]
+                title = item["title"]
+                raw_price = item.get("price")
+                canon_region = normalize_region(region)
+                is_india = (canon_region == "India")
+                try:
+                    live_msrp = float(raw_price) if (raw_price is not None and float(raw_price) > 0) else (499.0 if is_india else 24.99)
+                except (ValueError, TypeError):
+                    live_msrp = 499.0 if is_india else 24.99
+                product_id = f"{region[:2].upper()}_{asin[:6].upper()}"
+                
+                # GATE 1: Signal Discovery (Automated via Keepa or Live Scraper Fallback)
+                gate1_result = self._run_gate_1_signal_discovery(asin, region, clean_cat, item_metadata=item)
+                if not gate1_result["success"]:
+                    if gate1_result.get("blocked"):
+                        print(f"[ORCHESTRATOR] Product {product_id} blocked at Gate 1: {gate1_result['error']}")
+                    else:
+                        print(f"[ORCHESTRATOR] Product {product_id} failed Gate 1, skipping.")
+                    continue
+                
+                keepa_prod = gate1_result.get("keepa_product")
+                if not keepa_prod:
+                    print(f"[ORCHESTRATOR] Product {product_id} has no Keepa product data, skipping.")
+                    continue
+                
+                live_msrp = float(keepa_prod.current_price) if keepa_prod.current_price else 0.0
+                if live_msrp <= 0:
+                    print(f"[ORCHESTRATOR] Product {product_id} has zero or negative price, skipping.")
+                    continue
+                
+                # Create product record with Gate 1 data only
+                # Gate 2 (Defect Mining) and Gate 4 (Sourcing) require MANUAL entry
+                canon_region = normalize_region(region)
+                is_india = (canon_region == "India")
+                hub_name = "Moradabad / Surat / Rajkot Cluster" if is_india else "Ningbo / Shenzhen Cluster"
+
+                # Determine marketplace URL using the real ASIN from Keepa
+                if is_india:
+                    marketplace_url = f"https://www.amazon.in/dp/{asin}"
+                elif canon_region == "UK":
+                    marketplace_url = f"https://www.amazon.co.uk/dp/{asin}"
+                elif canon_region == "GCC_MiddleEast":
+                    marketplace_url = f"https://www.amazon.ae/dp/{asin}"
                 else:
-                    print(f"[ORCHESTRATOR] Product {product_id} failed Gate 1, skipping.")
-                continue
-            
-            keepa_prod = gate1_result.get("keepa_product")
-            if not keepa_prod:
-                print(f"[ORCHESTRATOR] Product {product_id} has no Keepa product data, skipping.")
-                continue
-            
-            live_msrp = float(keepa_prod.current_price) if keepa_prod.current_price else 0.0
-            if live_msrp <= 0:
-                print(f"[ORCHESTRATOR] Product {product_id} has zero or negative price, skipping.")
-                continue
-            
-            # Create product record with Gate 1 data only
-            # Gate 2 (Defect Mining) and Gate 4 (Sourcing) require MANUAL entry
-            canon_region = normalize_region(region)
-            is_india = (canon_region == "India")
-            hub_name = "Moradabad / Surat / Rajkot Cluster" if is_india else "Ningbo / Shenzhen Cluster"
+                    marketplace_url = f"https://www.amazon.com/dp/{asin}"
 
-            # Determine marketplace URL using the real ASIN from Keepa
-            if is_india:
-                marketplace_url = f"https://www.amazon.in/dp/{asin}"
-            elif canon_region == "UK":
-                marketplace_url = f"https://www.amazon.co.uk/dp/{asin}"
-            elif canon_region == "GCC_MiddleEast":
-                marketplace_url = f"https://www.amazon.ae/dp/{asin}"
-            else:
-                marketplace_url = f"https://www.amazon.com/dp/{asin}"
+                prod_data = {
+                    "id": product_id,
+                    "name": keepa_prod.title,
+                    "category": clean_cat,
+                    "region": region,
+                    "retail_msrp": live_msrp,
+                    "factory_cogs": 0.0,  # Will be filled in Gate 4
+                    "est_cac": round(live_msrp * (0.14 if is_india else 0.28), 2),  # 14% TACoS for India
+                    "sourcing_hub": hub_name,
+                    "marketplace_url": marketplace_url,
+                    "competitor_flaw": "",   # User fills in Gate 2
+                    "upgrade_v2": "",        # User fills in Gate 2
+                    "bsr_rank": gate1_result.get("data", {}).get("bsr_current", 999),
+                    "estimated_daily_units": 30,
+                    "ad_active_days": 0,
+                    "suppliers": [
+                        {
+                            # ⚠️ UNVERIFIED CLUSTER REFERENCE — Gate 4 requires real factory negotiation
+                            "factory_name": f"[Gate 4 Required] {clean_cat.split()[0].title()} Manufacturer — {hub_name}",
+                            "supplier_type": "Unverified Cluster Reference",
+                            "industrial_address": (
+                                "Surat GIDC / Moradabad Brass Cluster / Rajkot Auto Parts Cluster, India"
+                                if is_india else
+                                "Ningbo / Yiwu / Shenzhen Export Processing Zone, China"
+                            ),
+                            "contact_person": "⚠️ Not yet sourced — complete Gate 4",
+                            "contact_details": (
+                                "⚠️ Unverified — search IndiaMart / TradeIndia for verified contacts"
+                                if is_india else
+                                "⚠️ Unverified — search 1688.com / Alibaba for verified contacts"
+                            ),
+                            "platform_profile_url": "https://indiamart.com" if is_india else "https://alibaba.com",
+                            "fob_unit_price": "TBD — pending Gate 4 negotiation",
+                            "moq_units": 300,
+                            "sample_cost_leadtime": "TBD — pending Gate 4 negotiation",
+                            "certifications": "TBD — verify during Gate 4 sourcing",
+                        }
+                    ],
+                    # Gate 1 data
+                    "gate_1_bsr":          gate1_result.get("data", {}).get("bsr_current"),
+                    "gate_1_price_stable": gate1_result.get("data", {}).get("price_stable"),
+                    "gate_1_rating":       gate1_result.get("data", {}).get("rating"),
+                    "gate_1_review_count": gate1_result.get("data", {}).get("review_count"),
+                }
+                
+                # Save Gate 1 data FIRST (product must exist in master_products before gates)
+                gate1_eval = {
+                    "landed_cogs": 0.0,
+                    "gross_margin_pct": 0.0,
+                    "net_profit_pct": 0.0,
+                    "worst_case_stress_margin_pct": 0.0,
+                    "status": "PENDING",
+                    "score": 0.0,
+                    "consensus_status": "PENDING",
+                    "action_plan": "Awaiting Gate 2 manual defect review"
+                }
+                
+                record_product_evaluation(prod_data, gate1_eval)
+                
+                # NOW initialize gates (product exists in master_products)
+                init_product_gates(product_id)
+                
+                # Attach multi-platform listings (Amazon, Flipkart, Meesho)
+                try:
+                    from tools.multi_marketplace_engine import MultiMarketplaceEngine
+                    mkt = MultiMarketplaceEngine()
+                    mkt.attach_listings_to_product(product_id, clean_cat, region=region)
+                except Exception as e:
+                    print(f"[ORCHESTRATOR] Multi-platform listing attachment notice: {e}")
+                
+                # GATE 1: PASS
+                update_gate_status(product_id, 1, 'PASS', completed_by='system')
+                
+                # GATE 2: Defect Mining - MANUAL (blocked until human enters data)
+                update_gate_status(product_id, 2, 'BLOCKED', blocked_reason='Awaiting manual review mining: Enter 3-star defect summary and v2.0 engineering spec', completed_by='system')
+                
+                evaluated_products.append({
+                    "product_id": product_id,
+                    "status": "BLOCKED_AT_GATE_2",
+                    "message": "Gate 1 complete. Proceed to Gate 2 in UI for defect mining."
+                })
+                
+            # AI Supervisor: Validate ALL evaluated products post-evaluation
+            if evaluated_products:
+                try:
+                    validation_summary = get_supervisor().validate_products_batch(
+                        products=evaluated_products,
+                        marketplace="amazon",
+                        region=region
+                    )
+                    print(f"[ORCHESTRATOR] 🧠 AI Validation: {validation_summary['valid']} valid, "
+                          f"{validation_summary['invalid']} flagged, {validation_summary['auto_deleted']} auto-deleted")
+                except Exception as ve:
+                    print(f"[ORCHESTRATOR] AI validation notice: {ve}")
 
-            prod_data = {
-                "id": product_id,
-                "name": keepa_prod.title,
-                "category": clean_cat,
-                "region": region,
-                "retail_msrp": live_msrp,
-                "factory_cogs": 0.0,  # Will be filled in Gate 4
-                "est_cac": round(live_msrp * (0.14 if is_india else 0.28), 2),  # 14% TACoS for India
-                "sourcing_hub": hub_name,
-                "marketplace_url": marketplace_url,
-                "competitor_flaw": "",   # User fills in Gate 2
-                "upgrade_v2": "",        # User fills in Gate 2
-                "bsr_rank": gate1_result.get("data", {}).get("bsr_current", 999),
-                "estimated_daily_units": 30,
-                "ad_active_days": 0,
-                "suppliers": [
-                    {
-                        # ⚠️ UNVERIFIED CLUSTER REFERENCE — Gate 4 requires real factory negotiation
-                        "factory_name": f"[Gate 4 Required] {clean_cat.split()[0].title()} Manufacturer — {hub_name}",
-                        "supplier_type": "Unverified Cluster Reference",
-                        "industrial_address": (
-                            "Surat GIDC / Moradabad Brass Cluster / Rajkot Auto Parts Cluster, India"
-                            if is_india else
-                            "Ningbo / Yiwu / Shenzhen Export Processing Zone, China"
-                        ),
-                        "contact_person": "⚠️ Not yet sourced — complete Gate 4",
-                        "contact_details": (
-                            "⚠️ Unverified — search IndiaMart / TradeIndia for verified contacts"
-                            if is_india else
-                            "⚠️ Unverified — search 1688.com / Alibaba for verified contacts"
-                        ),
-                        "platform_profile_url": "https://indiamart.com" if is_india else "https://alibaba.com",
-                        "fob_unit_price": "TBD — pending Gate 4 negotiation",
-                        "moq_units": 300,
-                        "sample_cost_leadtime": "TBD — pending Gate 4 negotiation",
-                        "certifications": "TBD — verify during Gate 4 sourcing",
-                    }
-                ],
-                # Gate 1 data
-                "gate_1_bsr":          gate1_result.get("data", {}).get("bsr_current"),
-                "gate_1_price_stable": gate1_result.get("data", {}).get("price_stable"),
-                "gate_1_rating":       gate1_result.get("data", {}).get("rating"),
-                "gate_1_review_count": gate1_result.get("data", {}).get("review_count"),
-            }
-            
-            # Save Gate 1 data FIRST (product must exist in master_products before gates)
-            gate1_eval = {
-                "landed_cogs": 0.0,
-                "gross_margin_pct": 0.0,
-                "net_profit_pct": 0.0,
-                "worst_case_stress_margin_pct": 0.0,
-                "status": "PENDING",
-                "score": 0.0,
-                "consensus_status": "PENDING",
-                "action_plan": "Awaiting Gate 2 manual defect review"
-            }
-            
-            record_product_evaluation(prod_data, gate1_eval)
-            
-            # NOW initialize gates (product exists in master_products)
-            init_product_gates(product_id)
-            
-            # Attach multi-platform listings (Amazon, Flipkart, Meesho)
-            try:
-                from tools.multi_marketplace_engine import MultiMarketplaceEngine
-                mkt = MultiMarketplaceEngine()
-                mkt.attach_listings_to_product(product_id, clean_cat, region=region)
-            except Exception as e:
-                print(f"[ORCHESTRATOR] Multi-platform listing attachment notice: {e}")
-            
-            # GATE 1: PASS
-            update_gate_status(product_id, 1, 'PASS', completed_by='system')
-            
-            # GATE 2: Defect Mining - MANUAL (blocked until human enters data)
-            update_gate_status(product_id, 2, 'BLOCKED', blocked_reason='Awaiting manual review mining: Enter 3-star defect summary and v2.0 engineering spec', completed_by='system')
-            
-            evaluated_products.append({
-                "product_id": product_id,
-                "status": "BLOCKED_AT_GATE_2",
-                "message": "Gate 1 complete. Proceed to Gate 2 in UI for defect mining."
-            })
-            
-        # AI Supervisor: Validate ALL evaluated products post-evaluation
-        if evaluated_products:
-            try:
-                validation_summary = get_supervisor().validate_products_batch(
-                    products=evaluated_products,
-                    marketplace="amazon",
-                    region=region
-                )
-                print(f"[ORCHESTRATOR] 🧠 AI Validation: {validation_summary['valid']} valid, "
-                      f"{validation_summary['invalid']} flagged, {validation_summary['auto_deleted']} auto-deleted")
-            except Exception as ve:
-                print(f"[ORCHESTRATOR] AI validation notice: {ve}")
-
-        # Update Master Excel shadow export
-        update_master_excel()
-        return evaluated_products
+            # Update Master Excel shadow export
+            update_master_excel()
+            return evaluated_products
 
     def re_evaluate_single_product(self, product_id: str) -> Dict[str, Any]:
         """Re-evaluates an existing product in SQLite. Requires Gate 4 FOB to be set."""
