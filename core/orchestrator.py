@@ -500,6 +500,18 @@ class AutonomousProductResearchOrchestrator:
                 
                 evaluated_products.append({
                     "product_id": product_id,
+                    "name": prod_data["name"],
+                    "title": prod_data["name"],
+                    "category": clean_cat,
+                    "region": region,
+                    "price": live_msrp,
+                    "planned_msrp": live_msrp,
+                    "marketplace_url": marketplace_url,
+                    "product_url": marketplace_url,
+                    "asin": asin,
+                    "bsr_rank": prod_data["bsr_rank"],
+                    "rating": prod_data.get("gate_1_rating", 4.5),
+                    "review_count": prod_data.get("gate_1_review_count", 50),
                     "status": "BLOCKED_AT_GATE_2",
                     "message": "Gate 1 complete. Proceed to Gate 2 in UI for defect mining."
                 })

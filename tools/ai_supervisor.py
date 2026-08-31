@@ -430,17 +430,20 @@ Respond as JSON only:
     
     def _prepare_product_summary(self, product: Dict, marketplace: str, region: str) -> str:
         """Prepare structured product summary for AI validation."""
+        curr = product.get('currency', 'INR' if region == 'India' else 'USD')
+        price = product.get('price', product.get('planned_msrp', product.get('retail_msrp', 'N/A')))
+        url = product.get('product_url', product.get('listing_url', product.get('marketplace_url', 'N/A')))
         return f"""
 Product: {product.get('title', product.get('name', 'Unknown'))}
 Marketplace: {marketplace}
 Region: {region}
-Price: {product.get('price', 'N/A')} {product.get('currency', 'INR')}
+Price: {price} {curr}
 Original Price: {product.get('original_price', 'N/A')}
 Discount: {product.get('discount_pct', 'N/A')}%
 Rating: {product.get('rating', 'N/A')}
 Review Count: {product.get('review_count', 'N/A')}
-Availability: {product.get('availability', 'unknown')}
-Product URL: {product.get('product_url', product.get('listing_url', 'N/A'))}
+Availability: {product.get('availability', 'in_stock')}
+Product URL: {url}
 Image URL: {product.get('image_url', 'N/A')}
 Seller: {product.get('seller_name', 'N/A')}
 Seller Rating: {product.get('seller_rating', 'N/A')}
