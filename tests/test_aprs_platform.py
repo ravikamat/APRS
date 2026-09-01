@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.database import (
-    init_db, get_connection, record_product_evaluation,
+    init_db, get_connection, record_product_evaluation, get_connection,
     get_all_products, set_human_override, is_duplicate_product,
     log_meeting_turn, get_meeting_history
 )

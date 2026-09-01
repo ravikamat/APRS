@@ -6,7 +6,7 @@ from unittest.mock import patch
 from core.orchestrator import AutonomousProductResearchOrchestrator
 from core.database import (
     init_db, get_connection, get_all_products, 
-    get_current_gate, update_gate_status, init_product_gates, get_gate_status
+    get_current_gate, update_gate_status, init_product_gates, get_current_gate, update_gate_status, init_product_gates, get_gate_status, get_connection
 )
 from tools.keepa_api_client import KeepaProduct
 
