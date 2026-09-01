@@ -607,6 +607,49 @@ def init_db():
             applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # ── Website Capture Stats — tracks genuine captured data per website ──────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS website_capture_stats (
+            stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            marketplace TEXT NOT NULL,
+            region TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            total_captured INTEGER DEFAULT 0,
+            genuine_captured INTEGER DEFAULT 0,
+            failed_validation INTEGER DEFAULT 0,
+            last_captured_at TIMESTAMP,
+            last_validated_at TIMESTAMP,
+            validation_success_rate REAL DEFAULT 0.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(marketplace, region, source_url)
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_website_capture_stats_marketplace ON website_capture_stats(marketplace, region);')
+
+    # ── URL Validation Log — tracks URL validation results ───────────────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS url_validation_log (
+            validation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id TEXT NOT NULL,
+            marketplace TEXT NOT NULL,
+            region TEXT NOT NULL,
+            url TEXT NOT NULL,
+            is_accessible INTEGER DEFAULT 0,
+            http_status_code INTEGER,
+            content_matches_product INTEGER DEFAULT 0,
+            title_match_score REAL,
+            price_match_score REAL,
+            response_time_ms INTEGER,
+            error_message TEXT,
+            validated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_product ON url_validation_log(product_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_url ON url_validation_log(url);')
+
     # Ensure AI rejection columns exist in master_products
     _ai_cols = [
         ("ai_rejection_reason",    "TEXT"),
