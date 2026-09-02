@@ -14,10 +14,9 @@ from core.database import (
     write_ai_rejection
 )
 from core.utils import normalize_region
-from tools.amazon_live_scraper import AmazonLiveScraper, ScraperError
+from tools.amazon_scraper import AmazonScraper
 from tools.keepa_api_client import KeepaAPIClient, KeepaAPIError
 from core.excel_manager import update_master_excel
-from tools.ai_supervisor import get_supervisor
 
 # -------------------------------------------------------------
 # CATEGORY REFERRAL FEES MAPPING
@@ -179,8 +178,16 @@ class AutonomousProductResearchOrchestrator:
     Gate 6: Sign-Off & Artifacts (Human override + PO generation)
     """
     def __init__(self):
-        self.amazon_scraper = AmazonLiveScraper()
+        # V5 6-gate logic (being retired). Use core.gate_engine.GateEngine for V6.
+        self.amazon_scraper = AmazonScraper()
         self.keepa = KeepaAPIClient(api_key=os.environ.get("KEEPA_API_KEY", ""))
+        
+    # Stub for V5 AI Supervisor (removed in V6)
+    def _get_supervisor_stub(self):
+        class StubSupervisor:
+            def validate_products_batch(self, products, marketplace, region):
+                return {"valid": len(products), "invalid": 0, "auto_deleted": 0}
+        return StubSupervisor()
         
     def _run_gate_1_signal_discovery(self, asin: str, region: str, category: str, item_metadata: dict = None) -> Dict[str, Any]:
         """Gate 1: Fetch real BSR and price history from Keepa API, or live scraped listing fallback."""
@@ -360,13 +367,13 @@ class AutonomousProductResearchOrchestrator:
         print(f"[ORCHESTRATOR] 6-Stage Gated Discovery initiated for '{clean_cat}' in {region}...")
         
         # Register with AI Supervisor for active monitoring
-        supervisor = get_supervisor()
+        supervisor = self._get_supervisor_stub()
         task_id = supervisor.register_task("scrape", f"discover_{clean_cat}", marketplace="amazon", region=region)
         
         with supervisor.supervise(task_id) as task:
             # Step 1: Live Marketplace Scraping for candidate ASINs (using curl_cffi for anti-bot)
             try:
-                live_listings = self.amazon_scraper.search(clean_cat, region=region, max_results=max_candidates)
+                live_listings = self.amazon_scraper.search_sync(clean_cat, region=region, max_results=max_candidates)
                 print(f"[ORCHESTRATOR] Found {len(live_listings)} live products via curl_cffi scraper")
                 task.data_collected = {"listings": live_listings}
             except ScraperError as e:
@@ -519,7 +526,7 @@ class AutonomousProductResearchOrchestrator:
             # AI Supervisor: Validate ALL evaluated products post-evaluation
             if evaluated_products:
                 try:
-                    validation_summary = get_supervisor().validate_products_batch(
+                    validation_summary = self._get_supervisor_stub().validate_products_batch(
                         products=evaluated_products,
                         marketplace="amazon",
                         region=region

@@ -1,521 +1,324 @@
 """
-tools/discovery_engine.py — NIM-Powered Autonomous Source & Niche Discovery Engine.
+tools/discovery_engine.py — Discovery Orchestrator for APRS V6 Pro.
 
-A dedicated NIM AI agent that continuously discovers:
-1. NEW websites/platforms for trend hunting, marketplace scraping, review mining
-2. NEW micro-niche product categories from across the open web
-3. NEW seed keywords by expanding existing ones via NIM
-4. NEW communities (Reddit, forums) that discuss trending products
+Coordinates multi-marketplace product discovery using Playwright scrapers.
+NO LLM CALLS - purely deterministic orchestration.
 
-All discoveries are stored in DB tables (discovered_sources, dynamic_niches, dynamic_seed_keywords)
-and consumed by the Trend Scout, Marketplace Engine, and Background Daemon — making the entire
-system self-expanding with zero hardcoded limits.
+Pipeline:
+1. Load active niches from DB (dynamic_niches table)
+2. Load seed keywords from DB (dynamic_seed_keywords table)  
+3. For each niche/keyword: scrape Amazon + Flipkart
+4. Validate & deduplicate via Pydantic + ProductMatcher
+5. Store RawProduct[] -> SQLite
+
+Usage:
+    engine = DiscoveryEngine()
+    results = await engine.run_discovery_batch(region="India", max_niches=5)
 """
-import os
-import sys
-import json
-import re
+import asyncio
 import logging
-import urllib.request
-from typing import List, Dict, Any, Optional
+import sys
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
+# Ensure project root on path
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from models.nim_cluster import SupremeNIMCluster
-from config.settings import NIM_MODELS, REGIONAL_PROFILES
+from config.settings import settings
 from core.database import (
-    record_discovered_source, get_discovered_sources, update_source_usage,
-    record_dynamic_niche, get_dynamic_niches,
-    record_seed_keyword, get_seed_keywords, update_seed_usage,
-    record_trend_signal
+    get_dynamic_niches, get_seed_keywords, update_niche_scan,
+    record_dynamic_niche, record_seed_keyword,
 )
+from core.validation import (
+    RawProduct, CanonicalProduct, ProductMatcher, ValidationPipeline,
+)
+from tools.web_agent import WebAgent
 
 logger = logging.getLogger("aprs.discovery")
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s — %(message)s")
 
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-
-class NIMDiscoveryEngine:
+class DiscoveryEngine:
     """
-    Autonomous NIM-powered discovery agent that self-expands the search space.
-    Uses NIM to discover new sources, niches, and keywords — then validates
-    each via Jina Reader before storing in DB.
+    Deterministic multi-marketplace discovery orchestrator.
+    
+    Replaces NIM-powered discovery with database-driven niche/keyword expansion.
     """
+    
+    def __init__(
+        self,
+        max_concurrent_scrapers: int = 2,
+        max_pages_per_search: int = 2,
+    ):
+        self.max_concurrent = max_concurrent_scrapers
+        self.max_pages = max_pages_per_search
+        self.matcher = ProductMatcher()
+        self.validator = ValidationPipeline()
+    
+    async def run_discovery_batch(
+        self,
+        region: str = "India",
+        max_niches: int = None,
+        max_candidates_per_niche: int = None,
+        use_seed_keywords: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Run a complete discovery batch across niches and marketplaces.
+        
+        Args:
+            region: Target region (India, USA, etc.)
+            max_niches: Maximum niches to process (default from settings)
+            max_candidates_per_niche: Max products per niche (default from settings)
+            use_seed_keywords: Whether to also use seed keywords for search
+        
+        Returns:
+            Dict with discovery statistics and canonical products
+        """
+        max_niches = max_niches or settings.batch_niche_limit
+        max_candidates = max_candidates_per_niche or settings.batch_max_candidates
+        
+        logger.info(f"Starting discovery batch for {region}: max_niches={max_niches}, max_candidates={max_candidates}")
+        
+        # Load niches from DB
+        niches = get_dynamic_niches(region=region, active_only=True, limit=max_niches)
+        if not niches:
+            logger.warning(f"No active niches found for {region}, seeding defaults")
+            await self._seed_default_niches(region)
+            niches = get_dynamic_niches(region=region, active_only=True, limit=max_niches)
+        
+        logger.info(f"Loaded {len(niches)} niches from DB")
+        
+        # Load seed keywords
+        seed_keywords = []
+        if use_seed_keywords:
+            seed_keywords = get_seed_keywords(region=region, active_only=True, limit=20)
+            logger.info(f"Loaded {len(seed_keywords)} seed keywords from DB")
 
-    def __init__(self):
-        self.cluster = SupremeNIMCluster()
-        self.regions = list(REGIONAL_PROFILES.keys())
+        # Single universal agent — replaces AmazonScraper + FlipkartScraper
+        web_agent = WebAgent(headless=settings.web_agent_headless)
+        all_raw_products = []
+        niche_results = {}
 
-    def _jina_fetch(self, url: str, timeout: int = 12) -> str:
-        """Fetch any URL via Jina Reader, returns markdown content."""
-        try:
-            jina_url = f"https://r.jina.ai/{url}"
-            req = urllib.request.Request(jina_url, headers={"User-Agent": _UA, "Accept": "text/plain"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read(256 * 1024).decode("utf-8", errors="ignore")
-        except Exception as e:
-            logger.debug(f"Jina fetch failed for {url}: {e}")
-            return ""
+        # Process each niche
+        for niche in niches:
+            category = niche["category"]
+            niche_id = niche.get("niche_id")
+            search_limit = niche.get("search_limit", max_candidates)
 
-    def _nim_query(self, prompt: str, task_type: str = "nemotron_scout", temperature: float = 0.15, max_tokens: int = 600) -> str:
-        """Query NIM with a prompt, return raw response text."""
-        try:
-            res = self.cluster.query(
-                prompt=prompt,
-                task_type=task_type if task_type in NIM_MODELS else "ultra_reasoning",
-                system_prompt="You are an autonomous e-commerce intelligence agent. Respond in valid JSON array only.",
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=30.0
-            )
-            if isinstance(res, dict):
-                return res.get("content", "")
-            return str(res)
-        except Exception as e:
-            logger.warning(f"NIM query error: {e}", exc_info=True)
-            return ""
+            logger.info(f"Processing niche: {category} (limit: {search_limit})")
 
-    def _extract_json(self, raw: str) -> dict:
-        """Extract first JSON object from NIM response."""
-        try:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                return json.loads(raw[start:end])
-        except (json.JSONDecodeError, ValueError):
-            pass
-        return {}
+            # Search queries: niche category + seed keywords
+            search_queries = [category]
+            if use_seed_keywords and seed_keywords:
+                for sk in seed_keywords[:3]:
+                    search_queries.append(f"{category} {sk['keyword']}")
 
-    def _extract_json_array(self, raw: str) -> list:
-        """Extract JSON array from NIM response."""
-        try:
-            start = raw.find("[")
-            end = raw.rfind("]") + 1
-            if start >= 0 and end > start:
-                return json.loads(raw[start:end])
-        except (json.JSONDecodeError, ValueError):
-            pass
-        return []
+            niche_products = []
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # 1. DISCOVER NEW SOURCES (websites, platforms, communities)
-    # ═══════════════════════════════════════════════════════════════════════════
+            for query in search_queries:
+                if len(niche_products) >= search_limit:
+                    break
 
-    def discover_trend_sources(self, region: str = "India") -> List[Dict]:
-        """Ask NIM to find websites/platforms where trending products are discussed."""
-        prompt = f"""Find 10 real websites, platforms, blogs, or social channels where people in {region} 
-discover and discuss trending consumer products, viral gadgets, and e-commerce deals in 2026.
+                try:
+                    # WebAgent searches Amazon.in + Flipkart + Meesho in one call
+                    results = await web_agent.search_all_marketplaces(
+                        query=query,
+                        max_per_site=search_limit,
+                        region=region,
+                    )
+                    for p in results:
+                        if isinstance(p, RawProduct):
+                            niche_products.append(p)
 
-Include a mix of:
-- Social platforms (TikTok, Instagram pages, YouTube channels)
-- Deal/trend blogs and websites
-- Reddit communities
-- News/review sites
-- Marketplace trend pages (Amazon Movers, Flipkart Trending)
-- Forums and discussion boards
+                    logger.info(f"  Query '{query}': {len(results)} products across all marketplaces")
 
-For each source, provide the EXACT URL that can be scraped for product trends.
+                except Exception as e:
+                    logger.error(f"Error searching '{query}': {e}")
+                    continue
 
-Respond as a JSON array:
-[
-    {{"url": "https://...", "name": "...", "type": "social|blog|reddit|marketplace|forum|news", "description": "...", "reliability": 80}}
-]"""
-        raw = self._nim_query(prompt, task_type="nemotron_scout")
-        sources = self._extract_json_array(raw)
-        stored = []
+                # Rate limiting between queries
+                await asyncio.sleep(settings.scraper_delay_ms / 1000)
 
-        for src in sources:
-            url = src.get("url", "").strip()
-            if not url or len(url) < 10 or not url.startswith("http"):
-                continue
-
-            # Validate URL exists via Jina Reader (lightweight check)
-            content = self._jina_fetch(url, timeout=8)
-            is_valid = len(content) > 100
-
-            if is_valid:
-                sid = record_discovered_source(
-                    url=url,
-                    source_type=src.get("type", "trend"),
-                    source_name=src.get("name", ""),
-                    description=src.get("description", ""),
-                    region=region,
-                    reliability_score=float(src.get("reliability", 70)),
-                    discovered_by="nim_discovery"
+            # Validate + deduplicate within niche
+            if niche_products:
+                valid_products, errors = self.validator.validate_batch(
+                    [p.model_dump() for p in niche_products]
                 )
-                if sid:
-                    stored.append({"source_id": sid, "url": url, "name": src.get("name", "")})
-                    logger.info(f"Discovery: New source [{src.get('type','')}] {url[:60]}")
-
-        logger.info(f"Discovery: Found {len(stored)} valid sources for {region}")
-        return stored
-
-    def discover_marketplace_sources(self, region: str = "India") -> List[Dict]:
-        """Discover e-commerce marketplace URLs for product scraping."""
-        reg_cfg = REGIONAL_PROFILES.get(region, {})
-        known_mkts = ", ".join(reg_cfg.get("marketplaces", []))
-
-        prompt = f"""Find 8 real e-commerce marketplaces, D2C aggregators, and product discovery platforms 
-active in the {region} market that sell consumer products.
-
-Already known: {known_mkts}
-Find ADDITIONAL ones I might not know about. Include niche marketplaces, Shopify aggregators,
-local platforms, and wholesale/B2B sites.
-
-For each, provide the search URL pattern where I can search for products by keyword.
-
-Respond as a JSON array:
-[
-    {{"url": "https://...", "name": "...", "search_pattern": "https://...?q={{keyword}}", "description": "...", "reliability": 75}}
-]"""
-        raw = self._nim_query(prompt, task_type="ultra_reasoning")
-        sources = self._extract_json_array(raw)
-        stored = []
-
-        for src in sources:
-            url = src.get("url", "").strip()
-            if not url or len(url) < 10:
-                continue
-            sid = record_discovered_source(
-                url=url,
-                source_type="marketplace",
-                source_name=src.get("name", ""),
-                description=json.dumps({"search_pattern": src.get("search_pattern", ""), "desc": src.get("description", "")}),
-                region=region,
-                reliability_score=float(src.get("reliability", 65)),
-                discovered_by="nim_discovery"
-            )
-            if sid:
-                stored.append({"source_id": sid, "url": url, "name": src.get("name", "")})
-
-        logger.info(f"Discovery: Found {len(stored)} marketplace sources for {region}")
-        return stored
-
-    def discover_communities(self, region: str = "India") -> List[Dict]:
-        """Discover Reddit subreddits and forums that discuss trending products."""
-        prompt = f"""Find 10 active Reddit subreddits, Discord servers, Facebook groups, or online forums 
-where people in {region} discuss:
-- Trending products and gadgets
-- E-commerce deals and finds
-- Product reviews and recommendations
-- Viral TikTok/Instagram products
-
-For Reddit, provide the subreddit name (e.g., "tiktokmademebuyit").
-For other platforms, provide the URL.
-
-Respond as a JSON array:
-[
-    {{"url": "https://reddit.com/r/subreddit_name", "name": "r/subreddit_name", "platform": "reddit|discord|facebook|forum", "description": "...", "activity_level": "high|medium|low"}}
-]"""
-        raw = self._nim_query(prompt, task_type="nemotron_scout")
-        sources = self._extract_json_array(raw)
-        stored = []
-
-        for src in sources:
-            url = src.get("url", "").strip()
-            name = src.get("name", "")
-            if not url or len(url) < 5:
-                continue
-            platform = src.get("platform", "reddit")
-            reliability = 80.0 if src.get("activity_level") == "high" else 60.0
-
-            sid = record_discovered_source(
-                url=url,
-                source_type=f"community_{platform}",
-                source_name=name,
-                description=src.get("description", ""),
-                region=region,
-                reliability_score=reliability,
-                discovered_by="nim_discovery"
-            )
-            if sid:
-                stored.append({"source_id": sid, "url": url, "name": name})
-
-        logger.info(f"Discovery: Found {len(stored)} communities for {region}")
-        return stored
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # 2. DISCOVER NEW NICHES
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def discover_new_niches(self, region: str = "India", count: int = 15) -> List[Dict]:
-        """Ask NIM to discover emerging micro-niche product categories."""
-        reg_cfg = REGIONAL_PROFILES.get(region, {})
-        currency = reg_cfg.get("currency", "INR")
-        aov_min = reg_cfg.get("target_aov_min", 500)
-        aov_max = reg_cfg.get("target_aov_max", 3000)
-
-        # Get existing niches to avoid duplicates
-        existing = get_dynamic_niches(region=region, limit=500)
-        existing_cats = [n["category"].lower() for n in existing]
-        existing_sample = ", ".join(existing_cats[:20])
-
-        prompt = f"""You are an autonomous e-commerce product research AI.
-Discover {count} NEW emerging micro-niche consumer product categories for the {region} market.
-
-Price range: {currency} {aov_min}-{aov_max}
-Already known niches (DO NOT repeat these): {existing_sample}
-
-Requirements:
-- Each niche must be a specific, search-ready product keyword (e.g., "Portable UV-C Sanitizer Wand" not just "sanitizer")
-- Focus on problem-solving products with 30+ day demand (not fads)
-- Mix categories: Kitchen, Home, Beauty, Fitness, Electronics, Car, Pet, Office, Outdoor
-- Include both mainstream and underserved niches
-
-Respond as a JSON array of objects:
-[
-    {{"category": "Exact Product Niche Name", "priority": 85, "reasoning": "why this niche is promising"}}
-]"""
-        raw = self._nim_query(prompt, task_type="nemotron_scout")
-        niches = self._extract_json_array(raw)
-        stored = []
-
-        for n in niches:
-            cat = n.get("category", "").strip()
-            if not cat or len(cat) < 8 or cat.lower() in existing_cats:
-                continue
-            nid = record_dynamic_niche(
-                category=cat,
-                region=region,
-                priority_score=float(n.get("priority", 50)),
-                discovered_by="nim_discovery",
-                source_signal=n.get("reasoning", "")[:200]
-            )
-            if nid:
-                stored.append({"niche_id": nid, "category": cat, "region": region})
-                logger.info(f"Discovery: New niche [{region}] {cat[:50]}")
-
-        logger.info(f"Discovery: {len(stored)} new niches discovered for {region}")
-        return stored
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # 3. EXPAND SEED KEYWORDS
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def expand_seed_keywords(self, region: str = "India", count: int = 20) -> List[Dict]:
-        """Use NIM to generate fresh high-intent search seed keywords."""
-        existing = get_seed_keywords(region=region, limit=100)
-        existing_kws = [s["keyword"].lower() for s in existing]
-        existing_sample = ", ".join(existing_kws[:15])
-
-        prompt = f"""Generate {count} high-intent product search queries that real shoppers in {region} 
-would type into Google, Amazon, or social media to find trending consumer products.
-
-Already known seeds (DO NOT repeat): {existing_sample}
-
-Requirements:
-- Must be 3-8 words long
-- Must be product-focused (not brand queries)
-- Mix of: "best [product] under [price]", "viral [product] 2026", "[product] for [use case]"
-- Include trending categories: smart home, kitchen gadgets, car accessories, beauty tools, fitness, pet care, office
-
-Respond as a JSON array:
-[
-    {{"keyword": "viral kitchen gadgets under 1000", "velocity": 85}}
-]"""
-        raw = self._nim_query(prompt, task_type="nemotron_scout")
-        seeds = self._extract_json_array(raw)
-        stored = []
-
-        for s in seeds:
-            kw = s.get("keyword", "").strip()
-            if not kw or len(kw) < 8 or kw.lower() in existing_kws:
-                continue
-            sid = record_seed_keyword(
-                keyword=kw,
-                region=region,
-                source_platform="nim_generated",
-                velocity_score=float(s.get("velocity", 50))
-            )
-            if sid:
-                stored.append({"seed_id": sid, "keyword": kw})
-
-        logger.info(f"Discovery: {len(stored)} new seed keywords for {region}")
-        return stored
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # 4. EXPLORE ANY URL (extract product trends from ANY webpage)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def explore_url_for_trends(self, url: str, region: str = "India") -> List[Dict]:
-        """Fetch ANY URL via Jina Reader, then use NIM to extract trending product keywords."""
-        content = self._jina_fetch(url, timeout=15)
-        if len(content) < 50:
-            logger.warning(f"Discovery: URL returned too little content: {url[:60]}")
-            return []
-
-        # Truncate content to fit NIM context
-        content_trimmed = content[:6000]
-
-        prompt = f"""Analyze this webpage content and extract any trending product names, 
-product categories, or viral product keywords mentioned.
-
-URL: {url}
-Region context: {region}
-
-Content:
-{content_trimmed}
-
-Extract all product-related keywords and categories. For each:
-- Give the exact product name or category
-- Estimate trend velocity (0-100)
-
-Respond as a JSON array:
-[
-    {{"keyword": "Portable Electric Coffee Grinder", "type": "product|category|trend", "velocity": 80}}
-]"""
-        raw = self._nim_query(prompt, task_type="ultra_reasoning")
-        items = self._extract_json_array(raw)
-        stored = []
-
-        for item in items:
-            kw = item.get("keyword", "").strip()
-            if not kw or len(kw) < 5:
-                continue
-            item_type = item.get("type", "trend")
-            velocity = float(item.get("velocity", 50))
-
-            if item_type in ("product", "category"):
-                # Store as a dynamic niche
-                nid = record_dynamic_niche(
-                    category=kw, region=region,
-                    priority_score=velocity,
-                    discovered_by="url_exploration",
-                    source_signal=url[:200]
-                )
-                if nid:
-                    stored.append({"type": "niche", "keyword": kw, "niche_id": nid})
-
-            # Also store as seed keyword
-            sid = record_seed_keyword(
-                keyword=kw, region=region,
-                source_platform="url_exploration",
-                parent_keyword=url[:100],
-                velocity_score=velocity
-            )
-            if sid:
-                stored.append({"type": "seed", "keyword": kw, "seed_id": sid})
-
-        logger.info(f"Discovery: Extracted {len(stored)} items from {url[:50]}")
-        return stored
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # 5. FULL DISCOVERY CYCLE (run all discovery tasks for a region)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def run_full_discovery_cycle(self, region: str = "India") -> Dict[str, Any]:
-        """Execute complete discovery cycle: sources + niches + keywords + URL exploration."""
-        logger.info(f"Discovery Cycle: Starting full discovery for {region}")
-        results = {
+                if errors:
+                    logger.warning(f"  Validation errors: {len(errors)}")
+                
+                # Deduplicate
+                canonicals = self.validator.deduplicate(valid_products)
+                logger.info(f"  Niche '{category}': {len(niche_products)} raw -> {len(valid_products)} valid -> {len(canonicals)} canonical")
+                
+                # Limit to max_candidates
+                canonicals = canonicals[:max_candidates]
+                
+                # Update niche scan stats
+                if niche_id:
+                    update_niche_scan(niche_id, products_found=len(canonicals))
+                
+                niche_results[category] = {
+                    "raw_count": len(niche_products),
+                    "valid_count": len(valid_products),
+                    "canonical_count": len(canonicals),
+                    "products": [c.model_dump() for c in canonicals],
+                }
+                
+                all_raw_products.extend(niche_products)
+            else:
+                niche_results[category] = {
+                    "raw_count": 0,
+                    "valid_count": 0,
+                    "canonical_count": 0,
+                    "products": [],
+                }
+        
+        # Final deduplication across all niches
+        if all_raw_products:
+            valid_all, _ = self.validator.validate_batch([p.model_dump() for p in all_raw_products])
+            final_canonicals = self.validator.deduplicate(valid_all)
+        else:
+            final_canonicals = []
+        
+        logger.info(f"Discovery batch complete: {len(all_raw_products)} raw -> {len(final_canonicals)} final canonical products")
+        
+        return {
             "region": region,
-            "new_sources": [],
-            "new_marketplaces": [],
-            "new_communities": [],
-            "new_niches": [],
-            "new_seeds": [],
-            "url_extractions": []
+            "niches_processed": len(niches),
+            "total_raw_products": len(all_raw_products),
+            "total_canonical_products": len(final_canonicals),
+            "canonical_products": [c.model_dump() for c in final_canonicals],
+            "niche_details": niche_results,
         }
-
-        # 1. Discover new trend sources
-        try:
-            results["new_sources"] = self.discover_trend_sources(region)
-        except Exception as e:
-            logger.warning(f"Discovery: trend sources failed: {e}", exc_info=True)
-
-        # 2. Discover marketplace sources
-        try:
-            results["new_marketplaces"] = self.discover_marketplace_sources(region)
-        except Exception as e:
-            logger.warning(f"Discovery: marketplace sources failed: {e}", exc_info=True)
-
-        # 3. Discover communities
-        try:
-            results["new_communities"] = self.discover_communities(region)
-        except Exception as e:
-            logger.warning(f"Discovery: communities failed: {e}", exc_info=True)
-
-        # 4. Discover new niches
-        try:
-            results["new_niches"] = self.discover_new_niches(region, count=15)
-        except Exception as e:
-            logger.warning(f"Discovery: niches failed: {e}", exc_info=True)
-
-        # 5. Expand seed keywords
-        try:
-            results["new_seeds"] = self.expand_seed_keywords(region, count=20)
-        except Exception as e:
-            logger.warning(f"Discovery: seeds failed: {e}", exc_info=True)
-
-        # 6. Explore top discovered sources for product trends
-        try:
-            sources = get_discovered_sources(source_type="trend", region=region)
-            for src in sources[:3]:  # Explore top 3 sources
-                url = src.get("url", "")
-                if url:
-                    extracted = self.explore_url_for_trends(url, region)
-                    results["url_extractions"].extend(extracted)
-                    update_source_usage(src["source_id"], yielded_results=len(extracted) > 0)
-        except Exception as e:
-            logger.warning(f"Discovery: URL exploration failed: {e}", exc_info=True)
-
-        total = sum(len(v) for v in results.values() if isinstance(v, list))
-        logger.info(f"Discovery Cycle: Complete for {region} — {total} total discoveries")
-        return results
-
-    def seed_initial_data(self):
-        """One-time bootstrap: insert the baseline static seeds and sources into DB so the system
-        can start expanding from them. Only runs if tables are empty."""
-        from tools.trend_scout.trend_aggregator import VIRAL_SEED_ROOTS, COMMUNITY_SUBREDDITS
-        from core.background_daemon import STATIC_FALLBACK_NICHES
-
-        # Seed keywords
-        existing_seeds = get_seed_keywords(region="India", limit=1)
-        if not existing_seeds:
-            for region, seeds in VIRAL_SEED_ROOTS.items():
-                for kw in seeds:
-                    record_seed_keyword(kw, region=region, source_platform="bootstrap", velocity_score=75.0)
-            logger.info("Discovery: Bootstrapped seed keywords from VIRAL_SEED_ROOTS")
-
-        # Community sources
-        existing_communities = get_discovered_sources(source_type="community_reddit")
-        if not existing_communities:
-            for sub in COMMUNITY_SUBREDDITS:
-                record_discovered_source(
-                    url=f"https://www.reddit.com/r/{sub}/hot.json",
-                    source_type="community_reddit",
-                    source_name=f"r/{sub}",
-                    description=f"Reddit community tracking viral products",
-                    region="Global",
-                    reliability_score=75.0,
-                    discovered_by="bootstrap"
-                )
-            logger.info("Discovery: Bootstrapped community sources from COMMUNITY_SUBREDDITS")
-
-        # Niches
-        existing_niches = get_dynamic_niches(limit=1)
-        if not existing_niches:
-            for niche in STATIC_FALLBACK_NICHES:
+    
+    async def _seed_default_niches(self, region: str = "India"):
+        """Seed default niches if DB is empty."""
+        default_niches = [
+            {"category": "Stainless Steel Insulated Water Bottle", "region": region, "search_limit": 3, "priority_score": 85},
+            {"category": "Wireless Earbuds Noise Cancellation", "region": region, "search_limit": 3, "priority_score": 80},
+            {"category": "Portable Blender USB Rechargeable", "region": region, "search_limit": 3, "priority_score": 75},
+            {"category": "Electric Lunch Box Food Warmer", "region": region, "search_limit": 3, "priority_score": 70},
+            {"category": "Magnetic Wireless Car Charger", "region": region, "search_limit": 3, "priority_score": 75},
+            {"category": "Silicone Air Fryer Liners", "region": region, "search_limit": 3, "priority_score": 65},
+            {"category": "Cordless Handheld Vacuum Cleaner", "region": region, "search_limit": 3, "priority_score": 70},
+            {"category": "Smart LED Desk Lamp Wireless Charging", "region": region, "search_limit": 3, "priority_score": 65},
+            {"category": "Portable Neck Fan USB Rechargeable", "region": region, "search_limit": 3, "priority_score": 60},
+            {"category": "Collapsible Silicone Food Storage", "region": region, "search_limit": 3, "priority_score": 55},
+        ]
+        
+        for niche in default_niches:
+            try:
                 record_dynamic_niche(
                     category=niche["category"],
                     region=niche["region"],
-                    search_limit=niche.get("limit", 3),
-                    priority_score=60.0,
-                    discovered_by="bootstrap"
+                    search_limit=niche["search_limit"],
+                    priority_score=niche["priority_score"],
+                    discovered_by="bootstrap",
+                    source_signal="default_seed",
                 )
-            logger.info("Discovery: Bootstrapped niches from STATIC_FALLBACK_NICHES")
+            except Exception as e:
+                logger.debug(f"Niche seed skipped: {e}")
+        
+        # Seed default keywords
+        default_keywords = [
+            "best under 1000", "viral 2024", "must have gadgets",
+            "kitchen gadgets", "home organization", "car accessories",
+            "fitness equipment", "beauty tools", "pet products",
+            "office accessories", "travel essentials", "smart home",
+        ]
+        
+        for kw in default_keywords:
+            try:
+                record_seed_keyword(
+                    keyword=kw,
+                    region=region,
+                    source_platform="bootstrap",
+                    velocity_score=50.0,
+                )
+            except Exception as e:
+                logger.debug(f"Keyword seed skipped: {e}")
+        
+        logger.info(f"Seeded {len(default_niches)} default niches and {len(default_keywords)} seed keywords for {region}")
+    
+    async def run_single_niche_discovery(
+        self,
+        category: str,
+        region: str = "India",
+        max_candidates: int = None,
+    ) -> List[CanonicalProduct]:
+        """
+        Run discovery for a single niche/category.
+        Useful for targeted research.
+        """
+        max_candidates = max_candidates or settings.batch_max_candidates
+        
+        logger.info(f"Single niche discovery: {category} in {region}")
+        
+        async with AmazonScraper() as amazon, FlipkartScraper() as flipkart:
+            # Search both marketplaces
+            amazon_results = await amazon.search(category, max_results=max_candidates, max_pages=self.max_pages)
+            flipkart_results = await flipkart.search(category, max_results=max_candidates, max_pages=self.max_pages)
+            
+            all_products = list(amazon_results) + list(flipkart_results)
+            
+            if not all_products:
+                return []
+            
+            # Validate and deduplicate
+            valid_products, errors = self.validator.validate_batch(
+                [p.model_dump() for p in all_products]
+            )
+            
+            canonicals = self.validator.deduplicate(valid_products)
+            return canonicals[:max_candidates]
+
+
+async def run_discovery_cli(
+    region: str = "India",
+    category: str = None,
+    max_niches: int = 5,
+    max_candidates: int = 3,
+) -> Dict[str, Any]:
+    """CLI entry point for discovery."""
+    engine = DiscoveryEngine()
+    
+    if category:
+        # Single niche mode
+        canonicals = await engine.run_single_niche_discovery(category, region, max_candidates)
+        return {
+            "region": region,
+            "category": category,
+            "canonical_products": [c.model_dump() for c in canonicals],
+        }
+    else:
+        # Batch mode
+        return await engine.run_discovery_batch(
+            region=region,
+            max_niches=max_niches,
+            max_candidates_per_niche=max_candidates,
+        )
 
 
 if __name__ == "__main__":
-    engine = NIMDiscoveryEngine()
-    # Bootstrap initial data
-    engine.seed_initial_data()
-    print("Bootstrapped. Running discovery cycle for India...")
-    result = engine.run_full_discovery_cycle("India")
-    print(f"\nDiscovery Results:")
-    for k, v in result.items():
-        if isinstance(v, list):
-            print(f"  {k}: {len(v)} items")
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="APRS V6 Pro Discovery Engine")
+    parser.add_argument("--region", type=str, default="India", help="Target region")
+    parser.add_argument("--category", type=str, help="Single category to research")
+    parser.add_argument("--max-niches", type=int, default=5, help="Max niches in batch mode")
+    parser.add_argument("--max-candidates", type=int, default=3, help="Max candidates per niche")
+    
+    args = parser.parse_args()
+    
+    result = asyncio.run(run_discovery_cli(
+        region=args.region,
+        category=args.category,
+        max_niches=args.max_niches,
+        max_candidates=args.max_candidates,
+    ))
+    
+    import json
+    print(json.dumps(result, indent=2, default=str))

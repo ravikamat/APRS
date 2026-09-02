@@ -11,6 +11,7 @@ AMAZON_IN_REFERRAL = {
     "electronics_over_1000": 0.10,
     "fashion": 0.15,
     "home_kitchen": 0.11,
+    "kitchen": 0.11,
     "beauty": 0.09,
     "toys": 0.09,
     "sports": 0.09,
@@ -28,6 +29,7 @@ FLIPKART_COMMISSION = {
     "electronics": 0.05,
     "fashion": 0.20,
     "home": 0.12,
+    "kitchen": 0.12,
     "beauty": 0.10,
     "default": 0.15,
 }

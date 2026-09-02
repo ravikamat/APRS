@@ -1,22 +1,28 @@
+"""
+tests/test_phase4_nim.py — V6 Gate Engine Tests.
+Replaces old NIM swarm tests with 4-gate pipeline tests.
+"""
 import unittest
+import asyncio
 from unittest.mock import MagicMock, patch
-import os
 import tempfile
+import os
 from pathlib import Path
 
-from models.nim_cluster import SupremeNIMCluster, LLMArbiterDecision, NIMClusterExhausted
-from config.settings import NIM_MODELS
+from core.gate_engine import GateEngine
+from core.validation import CanonicalProduct
+from core.economics_engine import Comprehensive15FactorEconomics
 
-class TestPhase4NIM(unittest.TestCase):
+
+class TestV6GateEngine(unittest.TestCase):
 
     def setUp(self):
-        # Use system temp dir — never leaks into project data/
         self._tmp_dir = tempfile.TemporaryDirectory()
-        self.test_db = Path(self._tmp_dir.name) / f'test_phase4_{os.getpid()}_{id(self)}.db'
+        self.test_db = Path(self._tmp_dir.name) / f'test_gate_{os.getpid()}_{id(self)}.db'
         os.environ["APRS_DB_PATH"] = str(self.test_db)
         from core.database import init_db
         init_db()
-        self.cluster = SupremeNIMCluster()
+        self.engine = GateEngine()
 
     def tearDown(self):
         os.environ.pop("APRS_DB_PATH", None)
@@ -25,69 +31,199 @@ class TestPhase4NIM(unittest.TestCase):
         except Exception:
             pass
 
-    def test_fallback_is_cached(self):
-        """Verify that a successful NIM response is LRU-cached and returned on 2nd call."""
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "AI-generated analysis"}}]
-        }
-        with patch("requests.post", return_value=mock_resp) as mock_post:
-            r1 = self.cluster.query("test caching", timeout=5.0)
-            r2 = self.cluster.query("test caching", timeout=5.0)
-
-        # r1: real call, r2: from LRU cache
-        self.assertTrue(r1.get("success"))
-        self.assertFalse(r1.get("cached"))
-        self.assertTrue(r2.get("cached"))
-        self.assertEqual(r1["content"], r2["content"])
-        # Second call should NOT hit requests.post (LRU cache hit)
-        self.assertEqual(mock_post.call_count, 1)
-
-    def test_model_name_validation(self):
-        """Invalid task_type must raise ValueError immediately."""
-        with self.assertRaises(ValueError):
-            self.cluster.query("test", task_type="nonexistent_task")
-
-    def test_all_keys_exhausted_raises(self):
-        """When all 3 keys fail, NIMClusterExhausted must be raised — never silent fallback."""
-        with patch("requests.post", side_effect=ConnectionError("Simulated network failure")):
-            with self.assertRaises(NIMClusterExhausted) as ctx:
-                self.cluster.query("test exhausted keys", timeout=1.0)
-        self.assertIn("All NIM API keys exhausted", str(ctx.exception))
-
-    def test_arbiter_prompt_no_example(self):
-        """Pydantic LLMArbiterDecision schema validates correctly."""
-        decision = LLMArbiterDecision(
-            status="PASS",
-            overall_score=85.0,
-            landed_cogs=10.0,
-            gross_margin_pct=75.0,
-            est_cac=15.0,
-            net_profit_pct=30.0,
-            worst_case_stress_margin_pct=15.0,
-            consensus_status="CONSENSUS_PASS",
-            action_plan="Test plan"
+    def test_gate1_signal_passes_low_bsr(self):
+        """Gate 1 passes when BSR < threshold and price CV < threshold."""
+        product = CanonicalProduct(
+            canonical_title="Test Product",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            amazon_bsr=10000,
+            rating=4.5,
+            review_count=200,
         )
-        self.assertEqual(decision.status, "PASS")
-        self.assertEqual(decision.overall_score, 85.0)
+        result = self.engine.run_gate_1_signal(
+            product=product,
+            bsr_current=10000,
+            price_current=1299.0,
+            price_30d_ago=1280.0,
+        )
+        self.assertTrue(result.passed)
+        self.assertEqual(result.gate_number, 1)
 
-    def test_fallback_caching(self):
-        """Verify LRU cache stores and returns responses on repeated identical prompts."""
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "Cached response content"}}]
-        }
-        with patch("requests.post", return_value=mock_resp) as mock_post:
-            r1 = self.cluster.query("identical prompt", timeout=5.0)
-            r2 = self.cluster.query("identical prompt", timeout=5.0)
+    def test_gate1_signal_fails_high_bsr(self):
+        """Gate 1 fails when BSR >= threshold."""
+        product = CanonicalProduct(
+            canonical_title="Test Product",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            rating=4.5,
+            review_count=200,
+        )
+        result = self.engine.run_gate_1_signal(
+            product=product,
+            bsr_current=60000,
+            price_current=1299.0,
+            price_30d_ago=1280.0,
+        )
+        self.assertFalse(result.passed)
 
-        self.assertTrue(r1.get("success"))
-        self.assertTrue(r2.get("cached"))
-        self.assertEqual(r2["content"], "Cached response content")
-        # LRU cache should prevent 2nd network call
-        self.assertEqual(mock_post.call_count, 1)
+    def test_gate1_signal_fails_high_cv(self):
+        """Gate 1 fails when price CV >= threshold."""
+        product = CanonicalProduct(
+            canonical_title="Test Product",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            rating=4.5,
+            review_count=200,
+        )
+        result = self.engine.run_gate_1_signal(
+            product=product,
+            bsr_current=10000,
+            price_current=1299.0,
+            price_30d_ago=800.0,  # ~62% change
+        )
+        self.assertFalse(result.passed)
+
+    def test_gate3_economics_passes_viable_product(self):
+        """Gate 3 passes for product with >=15% net margin (actual fee structure)."""
+        product = CanonicalProduct(
+            canonical_title="Test Product",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            amazon_bsr=15000,
+            rating=4.5,
+            review_count=200,
+        )
+        # Use engine with lower margin threshold for test
+        engine = GateEngine(min_margin_pct=15.0)
+        result = engine.run_gate_3_economics(
+            product=product,
+            fob_price=350.0,
+            planned_msrp=1299.0,
+            region="India",
+            category="Kitchen",
+            marketplace="amazon",
+        )
+        self.assertTrue(result.passed)
+        self.assertGreaterEqual(result.details["expected"]["net_margin_pct"], 15.0)
+
+    def test_gate3_economics_fails_low_margin(self):
+        """Gate 3 fails when net margin < threshold."""
+        product = CanonicalProduct(
+            canonical_title="Test Product",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            rating=4.5,
+            review_count=200,
+        )
+        engine = GateEngine(min_margin_pct=15.0)
+        result = engine.run_gate_3_economics(
+            product=product,
+            fob_price=800.0,  # High FOB = low margin
+            planned_msrp=1299.0,
+            region="India",
+            category="Kitchen",
+            marketplace="amazon",
+        )
+        self.assertFalse(result.passed)
+
+    def test_gate4_scoring_passes_high_score(self):
+        """Gate 4 passes when score >= 75."""
+        product = CanonicalProduct(
+            canonical_title="Test Product",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            amazon_bsr=10000,
+            rating=4.5,
+            review_count=200,
+        )
+        result = self.engine.run_gate_4_scoring(
+            product=product,
+            bsr=10000,
+            rating=4.5,
+            review_count=200,
+            net_margin_pct=30.0,
+            has_defects=True,
+            competitor_count=3,
+        )
+        self.assertTrue(result.passed)
+        self.assertGreaterEqual(result.details["total_score"], 75)
+
+    def test_gate4_scoring_fails_low_score(self):
+        """Gate 4 fails when score < 75."""
+        product = CanonicalProduct(
+            canonical_title="Test Product",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            rating=3.5,
+            review_count=30,
+        )
+        result = self.engine.run_gate_4_scoring(
+            product=product,
+            bsr=50000,
+            rating=3.5,
+            review_count=30,
+            net_margin_pct=15.0,
+            has_defects=False,
+            competitor_count=15,
+        )
+        self.assertFalse(result.passed)
+
+    def test_full_pipeline_proceed(self):
+        """Full 4-gate pipeline returns PROCEED for viable product."""
+        product = CanonicalProduct(
+            canonical_title="Stainless Steel Water Bottle",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            amazon_bsr=15000,
+            rating=4.5,
+            review_count=200,
+        )
+        mock_reviews = [
+            "Great bottle but lid leaks after a week",
+            "Insulation good but paint chips easily",
+        ]
+        # Mock the review_miner to avoid Ollama dependency
+        async def mock_extract_defects(product_title, reviews):
+            return {
+                "defects": [
+                    {"defect": "Lid leaks", "severity": "major", "frequency": "common", "suggested_fix": "Better seal"}
+                ],
+                "v2_spec": {"improvement_1": "Leak-proof lid"}
+            }
+        
+        # Use GateEngine with lower margin threshold for test
+        engine = GateEngine(min_margin_pct=15.0)
+        with patch.object(engine.review_miner, 'extract_defects', side_effect=mock_extract_defects):
+            result = asyncio.run(engine.run_full_pipeline(
+                product=product,
+                bsr_current=15000,
+                price_current=1299.0,
+                reviews_3star=mock_reviews,
+                fob_price=280.0,  # Lower FOB to achieve >20% margin for scoring
+                planned_msrp=1299.0,
+                region="India",
+                category="Kitchen",
+                marketplace="amazon",
+                competitor_count=5,
+            ))
+        self.assertEqual(result.final_verdict, "PROCEED")
+        self.assertEqual(len(result.gate_results), 4)
+        self.assertTrue(all(g.passed for g in result.gate_results))
+
+    def test_economics_passes_gate_method(self):
+        """Test the passes_gate convenience method."""
+        passes, details = Comprehensive15FactorEconomics.passes_gate(
+            fob_price=350.0,
+            planned_msrp=1299.0,
+            region="India",
+            category="Kitchen",
+            marketplace="amazon",
+            min_margin_pct=15.0,  # Updated to match actual fee structure (11% referral)
+        )
+        self.assertTrue(passes)
+        self.assertTrue(details["gate_passed"])
+        self.assertGreaterEqual(details["expected"]["net_margin_pct"], 15.0)
 
 
 if __name__ == "__main__":

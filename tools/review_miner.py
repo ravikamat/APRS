@@ -6,7 +6,7 @@ a SINGLE local Ollama LLM call per product. Zero API cost.
 
 Design constraints:
 - One LLM call per product (not per review)
-- Local Ollama only (qwen2.5:14b or llama3.1:8b)
+- Local Ollama only (configurable via OLLAMA_MODEL env var)
 - Structured JSON output via prompt engineering
 - Input: Aggregated 3-star review texts (top 20 by helpfulness)
 - Output: List of defects with severity and suggested fixes
@@ -18,11 +18,13 @@ from typing import List, Dict, Any, Optional
 
 import httpx
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
 
-# Default Ollama configuration
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_OLLAMA_MODEL = "qwen2.5:14b"
+# Default Ollama configuration (from settings)
+DEFAULT_OLLAMA_URL = settings.ollama_url
+DEFAULT_OLLAMA_MODEL = settings.ollama_model
 DEFAULT_TIMEOUT = 120
 
 # Load prompt template from external file

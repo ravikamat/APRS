@@ -7,7 +7,7 @@ from pathlib import Path
 from core.orchestrator import AutonomousProductResearchOrchestrator
 from tools.keepa_api_client import KeepaProduct
 from core.database import init_db, get_connection, get_current_gate, update_gate_status, init_product_gates
-from tools.amazon_live_scraper import ScraperError
+from tools.amazon_scraper import ScraperError
 
 class TestPhase2Orchestrator(unittest.TestCase):
 

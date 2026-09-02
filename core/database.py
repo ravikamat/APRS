@@ -650,6 +650,68 @@ def init_db():
     cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_product ON url_validation_log(product_id);')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_url ON url_validation_log(url);')
 
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_product ON url_validation_log(product_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_url ON url_validation_log(url);')
+
+    # ── Learned Rules — persistent rule storage from rule_engine.py ────────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS learned_rules (
+            rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id_str TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            description TEXT,
+            condition TEXT NOT NULL,
+            action TEXT NOT NULL,
+            severity INTEGER DEFAULT 1,
+            params_json TEXT,
+            enabled INTEGER DEFAULT 1,
+            tags_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_learned_rules_enabled ON learned_rules(enabled);')
+
+    # ── Gate Execution Logs — audit trail for 4-gate pipeline ──────────────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS gate_logs (
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id TEXT NOT NULL,
+            gate_number INTEGER NOT NULL CHECK(gate_number BETWEEN 1 AND 4),
+            gate_name TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('PENDING', 'RUNNING', 'PASS', 'FAIL', 'BLOCKED')),
+            details_json TEXT,
+            error_message TEXT,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            duration_ms INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_gate_logs_product ON gate_logs(product_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_gate_logs_gate ON gate_logs(gate_number);')
+
+    # ── Review Snapshots — 3-star review storage for defect mining ────────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS review_snapshots (
+            snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id TEXT NOT NULL,
+            marketplace TEXT NOT NULL DEFAULT 'amazon',
+            rating REAL NOT NULL CHECK(rating >= 1.0 AND rating <= 5.0),
+            review_text TEXT NOT NULL,
+            review_title TEXT,
+            reviewer_name TEXT,
+            review_date TEXT,
+            helpful_votes INTEGER DEFAULT 0,
+            verified_purchase INTEGER DEFAULT 0,
+            scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_review_snapshots_product ON review_snapshots(product_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_review_snapshots_rating ON review_snapshots(rating);')
+
     # Ensure AI rejection columns exist in master_products
     _ai_cols = [
         ("ai_rejection_reason",    "TEXT"),
