@@ -1,9 +1,74 @@
 # APRS V7 — Complete End-to-End Build Plan
 ## Ultimate Autonomous Multi-Agent Product Research System
 
-> **Version:** 4.0 — Master Implementation Specification  
-> **Last Updated:** 2026-09-03  
+> **Version:** 4.1 — Master Implementation Specification (Gap-Audited)  
+> **Last Updated:** 2026-09-03T19:40 IST  
 > **Goal:** 100% autonomous, self-improving system with 5-tier LLM fallback, manual override at every layer, and internet-wide data collection from 50+ sources.
+
+---
+
+## ⚠️ SECTION 0: GAP AUDIT — BUGS & ISSUES FOUND IN CODEBASE
+
+**Audit date:** 2026-09-03 19:38 IST  
+**Method:** Automated file-by-file scan, grep search, pytest collection, schema diff
+
+### 🔴 CRITICAL — Will crash at runtime
+
+| # | File | Line | Issue | Fix Required |
+|---|------|------|-------|-------------|
+| C1 | `tools/discovery_engine.py` | 260 | **Second scraping block still uses OLD `AmazonScraper`/`FlipkartScraper` context manager.** Lines 37-38 were fixed to import `WebAgent`, but the `discover_single_niche()` method at line 260 still does `async with AmazonScraper() as amazon, FlipkartScraper() as flipkart:` — these classes are no longer imported. **Will crash when `discover_single_niche()` is called.** | Replace lines 260-275 with WebAgent calls |
+| C2 | `tools/trend_scout/trend_aggregator.py` | 32 | `from tools.ai_supervisor import get_supervisor` — **ai_supervisor was moved to `deprecated/`.** This import will crash on any trend scan. | Remove import; replace `get_supervisor()` calls with direct logic or stub |
+| C3 | `core/team_meeting.py` | 123-124 | `from models.nim_cluster import SupremeNIMCluster` — **models/nim_cluster.py no longer exists.** Team meeting feature is 100% broken. | Delete team_meeting.py (unused in V7 pipeline) or replace with LLMRouter call |
+| C4 | `tests/test_phase6_e2e.py` | 61 | `from tools.ai_supervisor import get_supervisor` — deprecated import. Test will fail at runtime. | Rewrite test or delete |
+
+### 🟡 MAJOR — Roadmap claims that don't match code
+
+| # | Issue | Reality |
+|---|-------|---------|
+| M1 | Roadmap says Gate 4 uses "NIM 550B Arbiter via LLMRouter" | Gate 4 is purely deterministic — `ScoringEngine.score()` with weighted rubric (BSR 25pts, Reviews 20pts, Margin 40pts, Defect 10pts, Competition 5pts). **No LLM call.** Upgrade plan: add optional NIM arbiter as Gate 5. |
+| M2 | Roadmap Section 5 says "23 existing tables" | Actually **26 tables** — `learned_rules`, `gate_logs`, and `review_snapshots` already exist in `init_db()`. |
+| M3 | Roadmap proposes different `learned_rules` schema | The init_db() version (columns: `rule_id_str`, `name`, `condition`, `action`, `severity`, `params_json`, `enabled`, `tags_json`) is the CORRECT one — rule_engine.py uses it. |
+| M4 | Roadmap proposes different `gate_logs` schema | The init_db() version has `gate_name`, `status` CHECK, `details_json`, FK to master_products. Keep it. |
+| M5 | `discovery_engine.py` docstring says "Playwright scrapers" | Line 37 imports WebAgent (browser-use). But `discover_single_niche()` at L260 still uses old Playwright scrapers. **Dual personality bug.** |
+| M6 | Roadmap says settings.py has Groq/Kimi fields | `groq_api_key`, `kimi_model_path`, `kimi_preset`, `kimi_enabled`, all `LLM_TIER_*`, all `AGENT_*_MODE` fields **do not exist** in settings.py. |
+| M7 | Roadmap Section 8 shows full .env template | `.env.example` has NONE of: `GROQ_*`, `KIMI_*`, `LLM_TIER_*`, `AGENT_*_MODE`, `EVOLUTION_GO_*`, `CRM_*`, `WORLDMONITOR_*`, `OPENBB_*`, `AGENT_REACH_*`. |
+| M8 | `economics_engine.py` claims "WIRE: OpenBB for live USD/INR" | All rates hardcoded (L41-60). No hook to receive live data. Must add `set_live_rate()` method. |
+
+### 🟠 MODERATE — Dead code
+
+| # | File | Issue |
+|---|------|-------|
+| D1 | `core/database.py` L586-614 | `ai_supervisor_logs` + `ai_task_improvements` tables — ai_supervisor is deprecated, tables + 3 helper functions are dead code |
+| D2 | `core/database.py` L981 | `record_product_evaluation()` hardcodes `"ai_supervisor"` as source |
+| D3 | `core/team_meeting.py` | 100% broken (SupremeNIMCluster). Not called by V7 pipeline. |
+| D4 | `pipeline.py` L6 docstring | Says "Playwright scrapers" — should say WebAgent/browser-use |
+
+### 🔵 STRUCTURAL — 20 Files missing, 6 DB tables missing
+
+**Files to build:** `core/llm_router.py`, `core/nim_client.py`, `core/groq_client.py`, `core/kimi_wrapper.py`, `core/supplier_models.py`, `core/outreach_engine.py`, `core/agent_orchestrator.py`, `core/scheduler.py`, `core/learning_engine.py`, `tools/internet_crawler.py`, `tools/niche_expander.py`, `tools/supplier_agent.py`, `tools/gst_verifier.py`, `tools/problem_miner.py`, `integrations/agent_reach.py`, `integrations/openbb_client.py`, `integrations/worldmonitor.py`, `integrations/evolution_go.py`, `integrations/crm_client.py`, `integrations/opencompany.py`
+
+**DB tables to add (6 not 8):** `supplier_profiles`, `outreach_drafts`, `supplier_conversations`, `problem_opportunities`, `llm_tier_log`, `pending_human_decisions`  
+(`learned_rules`, `gate_logs` already exist — see M2)
+
+### 🟢 CORRECTED DB TABLE COUNT
+
+**26 existing tables:** master_products, product_suppliers, daily_snapshots, meeting_audit_log, product_gate_progress, arbiter_decision_log, trend_signals, multi_platform_listings, swarm_audit_log, negative_findings, launchpad_items, defect_clusters, economics_assessments, discovered_sources, dynamic_niches, dynamic_seed_keywords, marketplace_config, scraped_listings, scraper_validations, ai_supervisor_logs, ai_task_improvements, website_capture_stats, url_validation_log, learned_rules, gate_logs, review_snapshots
+
+### 📊 TEST SUITE: 100 tests collected, 0 collection errors
+
+Runtime failures expected in: `test_phase6_e2e.py` (ai_supervisor import), possibly `test_aprs_v6_swarm.py`
+
+### 🎯 PRIORITY FIX ORDER (before any new build)
+
+```
+FIX 1: discovery_engine.py L260 — replace old AmazonScraper block     — 10 min
+FIX 2: trend_aggregator.py L32 — remove ai_supervisor import          — 5 min  
+FIX 3: team_meeting.py L123 — delete or stub SupremeNIMCluster         — 5 min
+FIX 4: test_phase6_e2e.py L61 — rewrite test                          — 10 min
+FIX 5: settings.py — add Groq/Kimi/Tier/AgentMode fields              — 15 min
+FIX 6: database.py — add 6 new tables                                 — 15 min
+FIX 7: economics_engine.py — add set_live_rate() hook                  — 10 min
+```
 
 ---
 
@@ -756,17 +821,29 @@ class SourceDiscoveryEngine:
     │                  │   ├─ LLM: NONE
     │                  │   └─ Output: PASS/FAIL + full P&L → economics_assessments
     │                  │
-    │                  ├─ GATE 4: NIM 550B Arbiter (via LLMRouter Tier 1)
+    │                  ├─ GATE 4: Deterministic Scoring (ScoringEngine, NO LLM)
     │                  │   ├─ Input: full dossier (G1+G2+G3 outputs combined)
-    │                  │   ├─ LLM: LLMRouter.chat(agent="gate4")
+    │                  │   ├─ LLM: NONE — deterministic weighted rubric
+    │                  │   │       BSR signal: 25 pts
+    │                  │   │       Review quality: 20 pts
+    │                  │   │       Margin safety: 40 pts
+    │                  │   │       Defect fixability: 10 pts
+    │                  │   │       Competition density: 5 pts
+    │                  │   ├─ Thresholds: ≥75 PROCEED | ≥60 MARGINAL | <60 REJECT
+    │                  │   └─ Output: verdict + score breakdown → launchpad_items (if PROCEED)
+    │                  │
+    │                  ├─ GATE 5 [PLANNED]: NIM 550B Arbiter (upgrade, not yet built)
+    │                  │   ├─ Input: G1-G4 full dossier + market context
+    │                  │   ├─ LLM: LLMRouter.chat(agent="gate5_arbiter")
     │                  │   │       → NIM 550B (tier 1, preferred)
     │                  │   │       → Ollama (tier 2 fallback)
     │                  │   │       → Groq 70B (tier 3 fallback)
     │                  │   │       → kimi-k3 (tier 4, batch only)
     │                  │   │       → Human override (tier 5)
-    │                  │   ├─ Prompt: "Given this full product dossier, verdict?"
-    │                  │   │          PROCEED|MARGINAL|REJECT + confidence + risk_flags
-    │                  │   └─ Output: verdict → launchpad_items (if PROCEED)
+    │                  │   ├─ Prompt: "Review this scored product. Override?"
+    │                  │   │          CONFIRM|OVERRIDE_REJECT|OVERRIDE_PROCEED + risk_flags
+    │                  │   ├─ Can override Gate 4 score if strong reasoning provided
+    │                  │   └─ Output: final_verdict → launchpad_items
     │                  │
     │                  ├─ Rule Engine (applied at every gate):
     │                  │   ├─ Reads: learned_rules table
@@ -939,41 +1016,13 @@ QUEUE_TASKS = [
 
 ## SECTION 5: DATABASE — COMPLETE TABLE MAP
 
-### Existing (23 tables — confirmed in database.py)
-`master_products`, `product_suppliers`, `daily_snapshots`, `meeting_audit_log`, `product_gate_progress`, `arbiter_decision_log`, `trend_signals`, `multi_platform_listings`, `swarm_audit_log`, `negative_findings`, `launchpad_items`, `defect_clusters`, `economics_assessments`, `discovered_sources`, `dynamic_niches`, `dynamic_seed_keywords`, `marketplace_config`, `scraped_listings`, `scraper_validations`, `ai_supervisor_logs`, `ai_task_improvements`, `website_capture_stats`, `url_validation_log`
+### Existing (26 tables — verified in database.py init_db())
+`master_products`, `product_suppliers`, `daily_snapshots`, `meeting_audit_log`, `product_gate_progress`, `arbiter_decision_log`, `trend_signals`, `multi_platform_listings`, `swarm_audit_log`, `negative_findings`, `launchpad_items`, `defect_clusters`, `economics_assessments`, `discovered_sources`, `dynamic_niches`, `dynamic_seed_keywords`, `marketplace_config`, `scraped_listings`, `scraper_validations`, `ai_supervisor_logs` _(deprecated)_, `ai_task_improvements` _(deprecated)_, `website_capture_stats`, `url_validation_log`, **`learned_rules`** _(already in init_db)_, **`gate_logs`** _(already in init_db)_, **`review_snapshots`** _(already in init_db)_
 
-### New Tables to Add (8 tables)
+### New Tables to Add (6 tables — NOT 8, learned_rules + gate_logs already exist)
 
 ```sql
--- 1. Missing from init_db() (rule_engine creates on-demand — schema mismatch risk)
-learned_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    rule_name TEXT NOT NULL,
-    condition_expr TEXT NOT NULL,       -- e.g. "category == 'Electronics' AND margin < 0.25"
-    verdict TEXT NOT NULL,              -- REJECT | CAUTION | BOOST
-    confidence REAL DEFAULT 1.0,
-    times_triggered INTEGER DEFAULT 0,
-    times_correct INTEGER DEFAULT 0,
-    created_by TEXT DEFAULT 'learning_agent',
-    created_at TEXT DEFAULT (datetime('now')),
-    last_triggered_at TEXT
-);
-
--- 2. Gate transition audit trail
-gate_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id TEXT NOT NULL,
-    gate_number INTEGER NOT NULL,
-    from_status TEXT,
-    to_status TEXT,
-    llm_tier_used INTEGER,              -- which tier answered Gate 4
-    triggered_by TEXT DEFAULT 'system',
-    duration_ms INTEGER,
-    metadata_json TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
--- 3. Supplier profiles from IndiaMART/Alibaba
+-- 1. Supplier profiles from IndiaMART/Alibaba
 supplier_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id TEXT NOT NULL,
@@ -996,7 +1045,7 @@ supplier_profiles (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
--- 4. Outreach drafts pending human approval
+-- 2. Outreach drafts pending human approval
 outreach_drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     supplier_id INTEGER REFERENCES supplier_profiles(id),
@@ -1012,7 +1061,7 @@ outreach_drafts (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
--- 5. Full supplier conversation threads
+-- 3. Full supplier conversation threads
 supplier_conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     thread_id TEXT NOT NULL,
@@ -1029,7 +1078,7 @@ supplier_conversations (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
--- 6. Unmet needs and problem opportunities
+-- 4. Unmet needs and problem opportunities
 problem_opportunities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_type TEXT NOT NULL,          -- reddit|amazon_qa|quora|youtube|flipkart_review|forum
@@ -1045,7 +1094,7 @@ problem_opportunities (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
--- 7. LLM tier usage monitoring
+-- 5. LLM tier usage monitoring
 llm_tier_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_name TEXT NOT NULL,
@@ -1059,7 +1108,7 @@ llm_tier_log (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
--- 8. Human override pending queue
+-- 6. Human override pending queue
 pending_human_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_name TEXT NOT NULL,
@@ -1083,13 +1132,14 @@ pending_human_decisions (
 D:\ecomm-strategy\
 │
 ├── config/
-│   ├── settings.py          ✅ DONE — add: groq_api_key, kimi_model_path,
-│   │                                       kimi_preset, kimi_enabled
+│   ├── settings.py          ✅ DONE — STILL MISSING: groq_api_key, kimi_model_path,
+│   │                                       kimi_preset, kimi_enabled, LLM_TIER_*,
+│   │                                       AGENT_*_MODE (all Tier 3/4/5 fields)
 │   ├── fees.py              ✅ DONE
 │   └── .env                 ✅ DONE — add new keys
 │
 ├── core/
-│   ├── database.py          ✅ DONE — ADD 8 new tables
+│   ├── database.py          ✅ DONE (26 tables) — ADD 6 new tables (NOT 8, learned_rules+gate_logs already exist)
 │   ├── validation.py        ✅ DONE
 │   ├── economics_engine.py  ✅ DONE — WIRE: OpenBB for live USD/INR + commodity
 │   ├── scoring_engine.py    ✅ DONE
@@ -1195,7 +1245,9 @@ AI_CALLS_IN_SYSTEM = {
     # Gate 1: NO LLM (Keepa API + math)
     # Gate 2: review_miner.py uses Ollama already
     # Gate 3: NO LLM (15-factor math)
-    "gate4_arbiter_verdict":         {"default": "nim", "task_type": "realtime",
+    # Gate 4: NO LLM (deterministic ScoringEngine — 5-factor weighted rubric)
+    "gate5_arbiter_override":         {"default": "nim", "task_type": "realtime",
+                                      "status": "PLANNED — not yet built",
                                       "fallback_ok": True},  # accepts Ollama/Groq verdict
     
     # SupplierAgent
@@ -1341,6 +1393,15 @@ PLATFORM_FEE_PCT=0.15
 
 ### WEEK 1 — LLM Foundation + Supplier Pipeline
 
+**Day 0 (PREREQUISITE — fix critical bugs from Gap Audit):**
+- FIX C1: `tools/discovery_engine.py` L260 — replace `AmazonScraper`/`FlipkartScraper` block with WebAgent
+- FIX C2: `tools/trend_scout/trend_aggregator.py` L32 — remove `ai_supervisor` import
+- FIX C3: `core/team_meeting.py` L123 — stub out or delete `SupremeNIMCluster`
+- FIX C4: `tests/test_phase6_e2e.py` L61 — rewrite test, remove `ai_supervisor` import
+- FIX M5: `tools/discovery_engine.py` docstring — update "Playwright" → "browser-use WebAgent"
+- FIX D4: `core/pipeline.py` L6 docstring — update "Playwright scrapers" → "WebAgent"
+- Verify: `C:\Python314\python.exe -m pytest tests/ -v --tb=short` — all 100 tests pass
+
 **Day 1:** `core/llm_router.py` — 5-tier fallback + manual override
 - `core/nim_client.py` — NIM 550B wrapper
 - `core/groq_client.py` — Groq free API wrapper
@@ -1354,7 +1415,7 @@ PLATFORM_FEE_PCT=0.15
 - `integrations/evolution_go.py` — WhatsApp API client
 - SMTP wiring via OpenCompany Gmail node
 
-**Day 4:** `core/database.py` — add 8 new tables
+**Day 4:** `core/database.py` — add 6 new tables (learned_rules + gate_logs already exist)
 - Test: product PROCEED → supplier found → draft email shown → human approves → email sends
 
 **Day 5:** `web/app.py` — Tab 5: Suppliers tab
