@@ -157,6 +157,9 @@ class ReviewMiner:
 
     async def _query_ollama_direct(self, prompt: str) -> str:
         """Direct Ollama call — last-resort fallback if LLMRouter is broken."""
+        from core.ollama_manager import ensure_ollama_running
+        ensure_ollama_running(settings.ollama_url)
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{settings.ollama_url}/api/generate",
@@ -224,7 +227,11 @@ class ReviewMiner:
         return {"defects": [], "v2_spec": {}, "parse_error": "invalid_json"}
 
     async def health_check(self) -> bool:
-        """Check if Ollama is reachable and the model is available."""
+        """Check if Ollama is reachable and the model is available (auto-starts if offline)."""
+        from core.ollama_manager import ensure_ollama_running
+        if not ensure_ollama_running(settings.ollama_url):
+            return False
+
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(

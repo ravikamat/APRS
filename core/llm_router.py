@@ -344,9 +344,14 @@ class LLMRouter:
             )
     
     async def _call_ollama(self, messages: List[Dict], json_mode: bool, max_tokens: int) -> LLMResponse:
-        """Call local Ollama via HTTP API."""
+        """Call local Ollama via HTTP API with automatic background daemon start."""
         if not settings.ollama_url:
             raise ServiceUnavailable("OLLAMA_URL not configured")
+        
+        # Ensure Ollama daemon is active in background
+        from core.ollama_manager import ensure_ollama_running
+        if not ensure_ollama_running(settings.ollama_url):
+            raise ServiceUnavailable("Local Ollama server is offline and auto-start failed")
         
         # Convert messages to Ollama format
         prompt = self._messages_to_prompt(messages)

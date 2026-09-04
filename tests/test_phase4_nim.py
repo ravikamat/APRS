@@ -194,7 +194,18 @@ class TestV6GateEngine(unittest.TestCase):
         
         # Use GateEngine with lower margin threshold for test
         engine = GateEngine(min_margin_pct=15.0)
-        with patch.object(engine.review_miner, 'extract_defects', side_effect=mock_extract_defects):
+
+        async def mock_gate_5(*args, **kwargs):
+            from core.gate_engine import GateResult, GateStatus
+            return GateResult(
+                gate_number=5,
+                gate_name="NIM Arbiter",
+                status=GateStatus.PASS,
+                details={"verdict": "CONFIRM", "confidence": 95},
+            )
+
+        with patch.object(engine.review_miner, 'extract_defects', side_effect=mock_extract_defects), \
+             patch.object(engine, 'run_gate_5_arbiter', side_effect=mock_gate_5):
             result = asyncio.run(engine.run_full_pipeline(
                 product=product,
                 bsr_current=15000,
