@@ -1,15 +1,15 @@
 """
-core/pipeline.py — V6 Pro End-to-End Pipeline.
+core/pipeline.py — V7 End-to-End Pipeline.
 
 Replaces V5 AutonomousProductResearchOrchestrator (6-gate, NIM-dependent, daemon-based)
 with deterministic 4-gate batch pipeline:
 
-Stage 1: Discovery (Playwright scrapers) → RawProduct[]
+Stage 1: Discovery (WebAgent via browser-use) → RawProduct[]
 Stage 2: Validation (Pydantic v2) → Validated RawProduct[]
 Stage 3: Deduplication (ProductMatcher) → CanonicalProduct[]
 Stage 4: Gate Execution (4-gate sequential) → PipelineResult[]
 
-No NIM calls. No daemons. Batch-only execution.
+No daemons. Batch-only execution.
 """
 import asyncio
 import logging
@@ -28,8 +28,6 @@ from core.validation import (
 from core.gate_engine import GateEngine, PipelineResult
 from core.rule_engine import create_rule_engine
 from core.economics_engine import Comprehensive15FactorEconomics
-from tools.amazon_scraper import AmazonScraper
-from tools.flipkart_scraper import FlipkartScraper
 from tools.discovery_engine import DiscoveryEngine
 from tools.review_miner import ReviewMiner
 

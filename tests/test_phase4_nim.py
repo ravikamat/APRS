@@ -208,7 +208,7 @@ class TestV6GateEngine(unittest.TestCase):
                 competitor_count=5,
             ))
         self.assertEqual(result.final_verdict, "PROCEED")
-        self.assertEqual(len(result.gate_results), 4)
+        self.assertEqual(len(result.gate_results), 5)
         self.assertTrue(all(g.passed for g in result.gate_results))
 
     def test_economics_passes_gate_method(self):

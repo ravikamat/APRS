@@ -270,7 +270,7 @@ Examples:
     scan_parser.add_argument("--max-pages", type=int, default=2, help="Max pages per search")
     scan_parser.add_argument("--no-seeds", action="store_true", help="Don't use seed keywords")
     scan_parser.add_argument("--competitors", type=int, default=10, help="Default competitor count")
-    scan_parser.add_argument("--min-margin", type=float, default=20.0, help="Min net margin %")
+    scan_parser.add_argument("--min-margin", type=float, default=20.0, help="Min net margin %%")
     scan_parser.add_argument("--min-score", type=int, default=75, help="Min score threshold")
     scan_parser.add_argument("--output", help="Save results to JSON file")
     

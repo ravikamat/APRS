@@ -726,6 +726,140 @@ def init_db():
             except Exception:
                 pass
 
+    # ── 1. Supplier Profiles — verified suppliers with GST, verification status ─────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS supplier_profiles (
+            supplier_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id TEXT NOT NULL,
+            company_name TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            profile_url TEXT,
+            contact_phone TEXT,
+            contact_email TEXT,
+            gst_number TEXT,
+            moq_estimate INTEGER,
+            verification_badge INTEGER DEFAULT 0,
+            product_categories TEXT,
+            location TEXT,
+            gst_verified INTEGER DEFAULT 0,
+            gst_check_date TEXT,
+            verification_score REAL DEFAULT 0.0,
+            status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING, VERIFIED, REJECTED, CONTACTED
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_supplier_profiles_product ON supplier_profiles(product_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_supplier_profiles_status ON supplier_profiles(status);')
+
+    # ── 2. Outreach Drafts — email drafts awaiting human approval ──────────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS outreach_drafts (
+            draft_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_id INTEGER NOT NULL,
+            product_id TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'email',  -- email, whatsapp, indiamart_chat
+            status TEXT NOT NULL DEFAULT 'DRAFT',  -- DRAFT, APPROVED, REJECTED, SENT, HOLD
+            approved_by TEXT,
+            approved_at TIMESTAMP,
+            sent_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES supplier_profiles(supplier_id) ON DELETE CASCADE,
+            FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_outreach_drafts_supplier ON outreach_drafts(supplier_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_outreach_drafts_status ON outreach_drafts(status);')
+
+    # ── 3. Supplier Conversations — email/WhatsApp thread history ──────────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS supplier_conversations (
+            conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_id INTEGER NOT NULL,
+            channel TEXT NOT NULL,  -- email, whatsapp, indiamart_chat
+            direction TEXT NOT NULL,  -- inbound, outbound
+            message_text TEXT,
+            message_id TEXT,  -- external message ID (e.g. WhatsApp message ID)
+            status TEXT NOT NULL DEFAULT 'RECEIVED',  -- RECEIVED, READ, REPLIED
+            received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES supplier_profiles(supplier_id) ON DELETE CASCADE
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_supplier_conversations_supplier ON supplier_conversations(supplier_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_supplier_conversations_received ON supplier_conversations(received_at);')
+
+    # ── 4. Problem Opportunities — unmet needs from reviews/Q&A/Reddit ──────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS problem_opportunities (
+            opportunity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id TEXT NOT NULL,
+            source TEXT NOT NULL,  -- amazon_qa, amazon_reviews, reddit, youtube, flipkart, quora, trustpilot
+            source_url TEXT,
+            problem_text TEXT NOT NULL,
+            problem_category TEXT,  -- functional, quality, ux, durability, missing_feature
+            severity TEXT,  -- critical, major, minor
+            frequency_estimate INTEGER,  -- estimated users affected (1-10 scale)
+            suggested_solution TEXT,
+            market_size_estimate TEXT,
+            competitor_solution TEXT,
+            status TEXT NOT NULL DEFAULT 'IDENTIFIED',  -- IDENTIFIED, VALIDATED, IN_PROGRESS, LAUNCHED
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_problem_opportunities_product ON problem_opportunities(product_id);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_problem_opportunities_source ON problem_opportunities(source);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_problem_opportunities_status ON problem_opportunities(status);')
+
+    # ── 5. LLM Tier Log — track which LLM tier was used for each call ──────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS llm_tier_log (
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_name TEXT NOT NULL,
+            tier_used INTEGER NOT NULL,  -- 1=NIM, 2=Ollama, 3=Groq, 4=Kimi, 5=Human
+            tier_name TEXT NOT NULL,
+            model_name TEXT,
+            task_type TEXT,
+            success INTEGER NOT NULL,
+            latency_ms INTEGER,
+            tokens_used INTEGER,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_llm_tier_log_agent ON llm_tier_log(agent_name);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_llm_tier_log_tier ON llm_tier_log(tier_used);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_llm_tier_log_created ON llm_tier_log(created_at);')
+
+    # ── 6. Pending Human Decisions — tasks waiting for human approval ───────────────
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS pending_human_decisions (
+            decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_name TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            context_json TEXT NOT NULL,
+            options_json TEXT NOT NULL,  -- [{"label": "Approve", "action": "approve"}, ...]
+            decision TEXT,  -- human's choice
+            decided_by TEXT,
+            decided_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,  -- auto-expire after 24h
+            status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING, DECIDED, EXPIRED, SKIPPED
+            priority INTEGER DEFAULT 1,
+            FOREIGN KEY (agent_name) REFERENCES master_products(product_id)  -- soft ref, not enforced
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pending_decisions_agent ON pending_human_decisions(agent_name);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pending_decisions_status ON pending_human_decisions(status);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pending_decisions_expires ON pending_human_decisions(expires_at);')
+
+    # Ensure AI rejection columns exist in master_products
+
     conn.commit()
     conn.close()
 
@@ -1610,6 +1744,88 @@ def persist_full_economics_assessment(product_id: str, assessment_result: dict) 
             composite_score=assessment_result.get("composite_score", 0.0)
         )
 
+
+# ── LEARNED RULES CRUD ────────────────────────────────────────────────────────
+
+def add_learned_rule(rule) -> Optional[int]:
+    """Insert a learned rule. Returns rule_id."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            INSERT INTO learned_rules (
+                rule_id_str, name, description, condition, action,
+                severity, params_json, enabled, tags_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            rule.rule_id,
+            rule.name,
+            rule.description,
+            rule.condition,
+            rule.action,
+            rule.severity,
+            json.dumps(rule.params) if rule.params else "{}",
+            1 if rule.enabled else 0,
+            json.dumps(rule.tags) if rule.tags else "[]",
+        ))
+        conn.commit()
+        rule_id = cur.lastrowid
+        conn.close()
+        return rule_id
+    except Exception as e:
+        logger.warning(f"add_learned_rule error: {e}")
+        conn.close()
+        return None
+
+
+def get_learned_rules(active_only: bool = True, limit: int = 100) -> List[Dict]:
+    """Get learned rules, optionally filtered by enabled status."""
+    conn = get_connection()
+    cur = conn.cursor()
+    query = "SELECT * FROM learned_rules WHERE 1=1"
+    params = []
+    if active_only:
+        query += " AND enabled = 1"
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    cur.execute(query, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    # Parse JSON fields
+    for row in rows:
+        row['params'] = json.loads(row['params_json']) if row['params_json'] else {}
+        row['tags'] = json.loads(row['tags_json']) if row['tags_json'] else []
+    conn.close()
+    return rows
+
+
+def update_learned_rule(rule_id: int, **kwargs) -> bool:
+    """Update a learned rule."""
+    if not kwargs:
+        return False
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        set_clauses = []
+        params = []
+        for key, value in kwargs.items():
+            if key in ('params', 'tags') and isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            set_clauses.append(f"{key} = ?")
+            params.append(value)
+        params.append(rule_id)
+        query = f"UPDATE learned_rules SET {', '.join(set_clauses)} WHERE rule_id = ?"
+        cur.execute(query, params)
+        conn.commit()
+        success = cur.rowcount > 0
+        conn.close()
+        return success
+    except Exception as e:
+        logger.warning(f"update_learned_rule error: {e}")
+        conn.close()
+        return False
+
+
 # ── DISCOVERED SOURCES CRUD ──────────────────────────────────────────────────
 
 def record_discovered_source(url: str, source_type: str = "trend", source_name: str = "",
@@ -2254,6 +2470,421 @@ def get_ai_task_improvements(limit: int = 100) -> List[Dict]:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM ai_task_improvements ORDER BY applied_at DESC LIMIT ?", (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+if __name__ == "__main__":
+    init_db()
+
+# ── OUTREACH DRAFTS CRUD ────────────────────────────────────────────────────────
+
+def add_outreach_draft(draft) -> Optional[int]:
+    """Insert a new outreach draft. Returns draft_id."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            INSERT INTO outreach_drafts (
+                supplier_id, product_id, subject, body, channel, status,
+                approved_by, approved_at, sent_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            draft.supplier_id,
+            draft.product_id,
+            draft.subject,
+            draft.body,
+            draft.channel.value if hasattr(draft.channel, 'value') else draft.channel,
+            draft.status.value if hasattr(draft.status, 'value') else draft.status,
+            draft.approved_by,
+            draft.approved_at,
+            draft.sent_at,
+        ))
+        conn.commit()
+        draft_id = cur.lastrowid
+        conn.close()
+        return draft_id
+    except Exception as e:
+        logger.warning(f"add_outreach_draft error: {e}")
+        conn.close()
+        return None
+
+
+def get_outreach_draft(draft_id: int):
+    """Get a single outreach draft by ID."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM outreach_drafts WHERE draft_id = ?", (draft_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_pending_outreach_drafts(status: str = "APPROVED", limit: int = 50) -> List[Dict]:
+    """Get outreach drafts with given status, ordered by creation date."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM outreach_drafts WHERE status = ? ORDER BY created_at ASC LIMIT ?",
+        (status, limit)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def update_outreach_draft(draft_id: int, **kwargs) -> bool:
+    """Update outreach draft fields."""
+    if not kwargs:
+        return False
+    
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Build dynamic update query
+        set_clauses = []
+        params = []
+        for key, value in kwargs.items():
+            if hasattr(value, 'value'):  # Handle enums
+                value = value.value
+            set_clauses.append(f"{key} = ?")
+            params.append(value)
+        
+        params.append(draft_id)
+        query = f"UPDATE outreach_drafts SET {', '.join(set_clauses)} WHERE draft_id = ?"
+        cur.execute(query, params)
+        conn.commit()
+        success = cur.rowcount > 0
+        conn.close()
+        return success
+    except Exception as e:
+        logger.warning(f"update_outreach_draft error: {e}")
+        conn.close()
+        return False
+
+
+# ── SUPPLIER PROFILES CRUD ────────────────────────────────────────────────────
+
+def add_supplier_profile(profile) -> Optional[int]:
+    """Insert a new supplier profile. Returns supplier_id."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            INSERT INTO supplier_profiles (
+                product_id, company_name, platform, profile_url,
+                contact_phone, contact_email, gst_number, moq_estimate,
+                verification_badge, product_categories, location,
+                gst_verified, gst_check_date, verification_score, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            profile.product_id,
+            profile.company_name,
+            profile.platform,
+            profile.profile_url,
+            profile.contact_phone,
+            profile.contact_email,
+            profile.gst_number,
+            profile.moq_estimate,
+            1 if profile.verification_badge else 0,
+            profile.product_categories,
+            profile.location,
+            1 if profile.gst_verified else 0,
+            profile.gst_check_date,
+            profile.verification_score,
+            profile.status.value if hasattr(profile.status, 'value') else profile.status,
+        ))
+        conn.commit()
+        supplier_id = cur.lastrowid
+        conn.close()
+        return supplier_id
+    except Exception as e:
+        logger.warning(f"add_supplier_profile error: {e}")
+        conn.close()
+        return None
+
+
+def get_supplier_profile(supplier_id: int):
+    """Get a single supplier profile by ID."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM supplier_profiles WHERE supplier_id = ?", (supplier_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_supplier_profiles_for_product(product_id: str) -> List[Dict]:
+    """Get all supplier profiles for a product."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM supplier_profiles WHERE product_id = ? ORDER BY verification_score DESC", (product_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def update_supplier_profile(supplier_id: int, **kwargs) -> bool:
+    """Update supplier profile fields."""
+    if not kwargs:
+        return False
+    
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        set_clauses = []
+        params = []
+        for key, value in kwargs.items():
+            if hasattr(value, 'value'):  # Handle enums
+                value = value.value
+            if key == 'verification_badge' or key == 'gst_verified':
+                value = 1 if value else 0
+            set_clauses.append(f"{key} = ?")
+            params.append(value)
+        
+        params.append(supplier_id)
+        query = f"UPDATE supplier_profiles SET {', '.join(set_clauses)} WHERE supplier_id = ?"
+        cur.execute(query, params)
+        conn.commit()
+        success = cur.rowcount > 0
+        conn.close()
+        return success
+    except Exception as e:
+        logger.warning(f"update_supplier_profile error: {e}")
+        conn.close()
+        return False
+
+
+# ── OUTREACH CONVERSATIONS CRUD ──────────────────────────────────────────────
+
+def add_supplier_conversation(
+    supplier_id: int,
+    channel: str,
+    direction: str,
+    message_text: str,
+    message_id: str = None,
+) -> Optional[int]:
+    """Log a conversation message with a supplier."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            INSERT INTO supplier_conversations (
+                supplier_id, channel, direction, message_text, message_id
+            ) VALUES (?, ?, ?, ?, ?)
+        ''', (supplier_id, channel, direction, message_text, message_id))
+        conn.commit()
+        cid = cur.lastrowid
+        conn.close()
+        return cid
+    except Exception as e:
+        logger.warning(f"add_supplier_conversation error: {e}")
+        conn.close()
+        return None
+
+
+def get_supplier_conversations(supplier_id: int, limit: int = 50) -> List[Dict]:
+    """Get conversation history for a supplier."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM supplier_conversations WHERE supplier_id = ? ORDER BY received_at DESC LIMIT ?",
+        (supplier_id, limit)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# ── PROBLEM OPPORTUNITIES CRUD ────────────────────────────────────────────────
+
+def add_problem_opportunity(
+    product_id: str,
+    source: str,
+    source_url: str = "",
+    problem_text: str = "",
+    problem_category: str = "other",
+    severity: str = "minor",
+    frequency_estimate: int = 1,
+    suggested_solution: str = "",
+    market_size_estimate: str = "",
+    competitor_solution: str = "",
+    status: str = "IDENTIFIED",
+) -> Optional[int]:
+    """Insert a new problem opportunity. Returns opportunity_id."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            INSERT INTO problem_opportunities (
+                product_id, source, source_url, problem_text,
+                problem_category, severity, frequency_estimate,
+                suggested_solution, market_size_estimate,
+                competitor_solution, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            product_id, source, source_url, problem_text,
+            problem_category, severity, frequency_estimate,
+            suggested_solution, market_size_estimate,
+            competitor_solution, status
+        ))
+        conn.commit()
+        oid = cur.lastrowid
+        conn.close()
+        return oid
+    except Exception as e:
+        logger.warning(f"add_problem_opportunity error: {e}")
+        conn.close()
+        return None
+
+
+def get_problem_opportunities(product_id: str) -> List[Dict]:
+    """Get all problem opportunities for a product."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM problem_opportunities WHERE product_id = ? ORDER BY created_at DESC", (product_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def update_problem_opportunity(opportunity_id: int, **kwargs) -> bool:
+    """Update a problem opportunity."""
+    if not kwargs:
+        return False
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        set_clauses = []
+        params = []
+        for key, value in kwargs.items():
+            set_clauses.append(f"{key} = ?")
+            params.append(value)
+        params.append(opportunity_id)
+        query = f"UPDATE problem_opportunities SET {', '.join(set_clauses)} WHERE opportunity_id = ?"
+        cur.execute(query, params)
+        conn.commit()
+        success = cur.rowcount > 0
+        conn.close()
+        return success
+    except Exception as e:
+        logger.warning(f"update_problem_opportunity error: {e}")
+        conn.close()
+        return False
+
+
+def get_all_problem_opportunities(limit: int = 100, status: str = None) -> List[Dict]:
+    """Get all problem opportunities, optionally filtered by status."""
+    conn = get_connection()
+    cur = conn.cursor()
+    query = "SELECT * FROM problem_opportunities WHERE 1=1"
+    params = []
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    cur.execute(query, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# ── PENDING HUMAN DECISIONS CRUD ──────────────────────────────────────────────
+
+async def record_pending_decision(
+    agent_name: str,
+    task_type: str,
+    context: List[Dict],
+    options: List[Dict],
+    priority: int = 1,
+) -> str:
+    """Record a task waiting for human decision. Returns decision_id."""
+    import uuid
+    import json
+    from datetime import timedelta
+    
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        decision_id = str(uuid.uuid4())[:8]
+        expires_at = (datetime.utcnow() + timedelta(hours=24)).isoformat()
+        
+        cur.execute('''
+            INSERT INTO pending_human_decisions (
+                decision_id, agent_name, task_type, context_json, options_json,
+                priority, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            decision_id,
+            agent_name,
+            task_type,
+            json.dumps(context, default=str),
+            json.dumps(options, default=str),
+            priority,
+            expires_at,
+        ))
+        conn.commit()
+        conn.close()
+        return decision_id
+    except Exception as e:
+        logger.warning(f"record_pending_decision error: {e}")
+        conn.close()
+        return ""
+
+
+def get_pending_decisions(status: str = "PENDING", limit: int = 50) -> List[Dict]:
+    """Get pending human decisions."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM pending_human_decisions WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+        (status, limit)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# ── LLM TIER LOG ──────────────────────────────────────────────────────────────
+
+def log_llm_tier_usage(log_data: dict) -> Optional[int]:
+    """Record which LLM tier was used for an agent call."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            INSERT INTO llm_tier_log (
+                agent_name, tier_used, tier_name, model_name, task_type,
+                success, latency_ms, tokens_used, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            log_data.get("agent_name", ""),
+            log_data.get("tier_used", 0),
+            log_data.get("tier_name", ""),
+            log_data.get("model_name", ""),
+            log_data.get("task_type", ""),
+            1 if log_data.get("success", True) else 0,
+            log_data.get("latency_ms", 0),
+            log_data.get("tokens_used", 0),
+            log_data.get("error", ""),
+        ))
+        conn.commit()
+        lid = cur.lastrowid
+        conn.close()
+        return lid
+    except Exception as e:
+        logger.warning(f"log_llm_tier_usage error: {e}")
+        conn.close()
+        return None
+
+
+def get_llm_tier_stats(limit: int = 100) -> List[Dict]:
+    """Get LLM tier usage statistics."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM llm_tier_log ORDER BY created_at DESC LIMIT ?", (limit,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows

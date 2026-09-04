@@ -16,8 +16,23 @@ class TestPhase1Database(unittest.TestCase):
         self.conn = get_connection()
     
     def tearDown(self):
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
         self.conn.close()
-        self.temp_dir.cleanup()
+        # Remove DB files manually to avoid Windows lock on WAL/SHM
+        import glob, gc
+        gc.collect()
+        for f in glob.glob(str(self.db_path) + "*"):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            pass  # Best-effort on Windows
     
     def test_pragma_foreign_keys_enabled(self):
         cur = self.conn.cursor()

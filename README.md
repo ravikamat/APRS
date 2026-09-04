@@ -39,7 +39,6 @@ D:/ecomm-strategy/ (APRS)
 │   ├── economics_engine.py             # 15-Factor unit economics & scenario projection engine
 │   ├── product_matcher.py              # Canonical deduplication & Demand Proxy Scoring
 │   ├── background_daemon.py            # 24/7 background worker with multi-region niche rotation
-│   ├── team_meeting.py                 # AI War Room: 6-specialist debate system
 │   ├── excel_manager.py                # Atomic 4-sheet master Excel shadow export
 │   ├── meeting_doc_manager.py          # Word (.docx) executive meeting minutes generator
 │   └── utils.py                        # Regional normalization & currency formatters

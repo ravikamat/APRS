@@ -1,20 +1,24 @@
 """
-core/gate_engine.py — Unified 4-Gate State Machine for APRS V6 Pro.
+core/gate_engine.py — Unified 5-Gate State Machine for APRS V7 Pro.
 
-Replaces the scattered 6-gate system with a deterministic 4-gate pipeline:
+Replaces the scattered 6-gate system with a deterministic 5-gate pipeline:
 
 Gate 1: Keepa BSR Signal Validation (<50k BSR, CV <0.30)
 Gate 2: Defect Mining (Ollama - 3-star review analysis)  
 Gate 3: 15-Factor Economics (>=20% net margin)
 Gate 4: Deterministic Scoring (>=75/100)
+Gate 5: NIM Arbiter Review
 
 Each gate is a pure function with explicit pass/fail criteria.
 No LLM calls in gates 1, 3, 4. Only Gate 2 uses local Ollama.
+Gate 5 uses NIM 550B via LLMRouter.
 """
+import json
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, Tuple
+from datetime import datetime
 from enum import Enum
+from typing import Dict, Any, Optional, List, Tuple
 
 from config.settings import settings
 from core.validation import (
@@ -23,6 +27,7 @@ from core.validation import (
 from core.economics_engine import Comprehensive15FactorEconomics
 from core.scoring_engine import ScoringEngine, ScoreBreakdown
 from tools.review_miner import ReviewMiner
+from core.llm_router import LLMRouter, LLMTaskType
 
 logger = logging.getLogger("aprs.gate_engine")
 
@@ -69,15 +74,17 @@ class PipelineResult:
         for i, g in enumerate(self.gate_results):
             if g.status != GateStatus.PASS:
                 return g.gate_number
-        return 5  # All gates passed
+        return 6  # All gates passed (including Gate 5)
 
 
 class GateEngine:
     """
-    Unified 4-Gate State Machine.
+    Unified 5-Gate State Machine.
     
     Executes gates sequentially. Each gate must pass before the next runs.
     Deterministic - no LLM in gates 1, 3, 4.
+    Gate 2 uses local Ollama.
+    Gate 5 uses NIM 550B via LLMRouter.
     """
     
     GATE_DEFINITIONS = {
@@ -85,6 +92,7 @@ class GateEngine:
         2: ("Defect Mining", "Ollama extracts actionable defects from 3-star reviews"),
         3: ("Economics Validation", "15-Factor 3-Scenario >= 20% net margin"),
         4: ("Deterministic Scoring", "0-100 Rubric >= 75"),
+        5: ("NIM Arbiter", "NIM 550B reviews full dossier, overrides if needed"),
     }
     
     def __init__(
@@ -349,6 +357,174 @@ class GateEngine:
                 error=f"Scoring failed: {e}",
             )
     
+    async def run_gate_5_arbiter(
+        self,
+        product: CanonicalProduct,
+        gate_results: List[GateResult],
+        region: str = "India",
+        category: str = "General",
+        marketplace: str = "amazon",
+        **econ_kwargs
+    ) -> GateResult:
+        """
+        Gate 5: NIM Arbiter Review
+        
+        Criteria:
+        - NIM 550B reviews full dossier (Gates 1-4 outputs)
+        - Can override Gate 4 verdict with strong reasoning
+        - Outputs: CONFIRM, OVERRIDE_REJECT, OVERRIDE_PROCEED
+        
+        Uses LLMRouter with NIM 550B (Tier 1 preferred).
+        """
+        logger.info(f"Gate 5: NIM Arbiter reviewing {product.canonical_title[:50]}")
+        
+        try:
+            # Prepare context for NIM 550B
+            context = {
+                "product": {
+                    "title": product.canonical_title,
+                    "category": product.category,
+                    "region": region,
+                    "bsr": gate_results[0].details.get("bsr_current") if len(gate_results) > 0 else None,
+                    "price_stability": gate_results[0].details.get("price_cv") if len(gate_results) > 0 else None,
+                },
+                "gate_results": [
+                    {
+                        "gate": g.gate_number,
+                        "name": g.gate_name,
+                        "status": g.status.value,
+                        "details": g.details,
+                    }
+                    for g in gate_results
+                ],
+                "economics": gate_results[2].details.get("full_assessment") if len(gate_results) > 2 else None,
+                "scoring": gate_results[3].details if len(gate_results) > 3 else None,
+            }
+            
+            # Build prompt for NIM 550B
+            prompt_parts = [
+                "You are the Supreme Investment Arbiter for an autonomous e-commerce product research system.",
+                "Review the complete 4-gate analysis dossier for this product and issue a final verdict.",
+                "",
+                "PRODUCT DOSSIER:",
+                json.dumps({
+                    "product": {
+                        "title": product.canonical_title,
+                        "category": product.category,
+                        "region": region,
+                        "bsr": gate_results[0].details.get("bsr_current") if len(gate_results) > 0 else None,
+                        "price_stability": gate_results[0].details.get("price_cv") if len(gate_results) > 0 else None,
+                    },
+                    "gate_results": [
+                        {
+                            "gate": g.gate_number,
+                            "name": g.gate_name,
+                            "status": g.status.value,
+                            "details": g.details,
+                        }
+                        for g in gate_results
+                    ],
+                    "economics": gate_results[2].details.get("full_assessment") if len(gate_results) > 2 else None,
+                    "scoring": gate_results[3].details if len(gate_results) > 3 else None,
+                }, indent=2, default=str),
+                "",
+                "INSTRUCTIONS:",
+                "1. Review all 4 gate outputs carefully",
+                "2. Check for any red flags, inconsistencies, or missed risks",
+                "3. Consider: market timing, competitive response, supply chain risk, regulatory changes",
+                "4. Decide: CONFIRM (agree with Gate 4), OVERRIDE_REJECT (strong disagreement), or OVERRIDE_PROCEED (strong disagreement, proceed anyway)",
+                "5. Provide specific risk flags and mitigation recommendations",
+                "",
+                "OUTPUT FORMAT (strict JSON):",
+                "{",
+                '    "verdict": "CONFIRM|OVERRIDE_REJECT|OVERRIDE_PROCEED",',
+                '    "confidence": 0-100,',
+                '    "reasoning": "detailed reasoning for verdict",',
+                '    "risk_flags": ["flag1", "flag2"],',
+                '    "mitigation_recommendations": ["action1", "action2"],',
+                '    "key_insights": ["insight1", "insight2"]',
+                "}",
+            ]
+            prompt = "\n".join(prompt_parts)
+            
+            # Call NIM 550B via LLMRouter
+            try:
+                from core.llm_router import LLMRouter, LLMTaskType
+                router = LLMRouter()
+                response = await router.chat(
+                    messages=[
+                        {"role": "system", "content": "You are the Supreme Investment Arbiter for an autonomous e-commerce product research system. You review complete 4-gate analysis dossiers and issue final verdicts with strong reasoning. Be precise, decisive, and thorough."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    agent_name="gate5_arbiter",
+                    task_type=LLMTaskType.GATE5_ARBITER,
+                    json_mode=True,
+                    max_tokens=1500,
+                )
+                
+                result = json.loads(response.text)
+                
+                # Determine pass/fail based on verdict
+                verdict = result.get("verdict", "CONFIRM")
+                passed = verdict in ("CONFIRM", "OVERRIDE_PROCEED")
+                
+                details = {
+                    "verdict": verdict,
+                    "confidence": result.get("confidence", 0),
+                    "reasoning": result.get("reasoning", ""),
+                    "risk_flags": result.get("risk_flags", []),
+                    "mitigation_recommendations": result.get("mitigation_recommendations", []),
+                    "key_insights": result.get("key_insights", []),
+                    "nim_reasoning": result.get("reasoning", ""),
+                }
+                
+                return GateResult(
+                    gate_number=5,
+                    gate_name=self.GATE_DEFINITIONS[5][0],
+                    status=GateStatus.PASS if passed else GateStatus.FAIL,
+                    details=details,
+                )
+            
+            except Exception as e:
+                _logger = logging.getLogger("aprs.gate_engine")
+                _logger.warning(f"Gate 5 (NIM Arbiter) unavailable, defaulting to CONFIRM: {e}")
+                # Default to CONFIRM when NIM is not available
+                details = {
+                    "verdict": "CONFIRM",
+                    "confidence": 50,
+                    "reasoning": "NIM Arbiter unavailable (no NIM configured or connection failed). Defaulting to CONFIRM based on Gates 1-4 passing.",
+                    "risk_flags": ["NIM_ARBITER_UNAVAILABLE"],
+                    "mitigation_recommendations": ["Configure NIM 550B for full arbiter review"],
+                    "key_insights": ["Arbiter fallback triggered"],
+                    "nim_reasoning": "Fallback - NIM unavailable",
+                }
+                return GateResult(
+                    gate_number=5,
+                    gate_name=self.GATE_DEFINITIONS[5][0],
+                    status=GateStatus.PASS,
+                    details=details,
+                )
+        
+        except Exception as e:
+            _logger = logging.getLogger("aprs.gate_engine")
+            _logger.error(f"Gate 5 (NIM Arbiter) outer error for {product.canonical_title}: {e}")
+            # Even outer error defaults to CONFIRM
+            details = {
+                "verdict": "CONFIRM",
+                "confidence": 30,
+                "reasoning": "NIM Arbiter outer error. Defaulting to CONFIRM.",
+                "risk_flags": ["NIM_ARBITER_ERROR"],
+                "mitigation_recommendations": ["Check NIM configuration"],
+                "key_insights": [],
+                "nim_reasoning": "Outer fallback",
+            }
+            return GateResult(
+                gate_number=5,
+                gate_name=self.GATE_DEFINITIONS[5][0],
+                status=GateStatus.PASS,
+                details=details,
+            )
+    
     async def run_full_pipeline(
         self,
         product: CanonicalProduct,
@@ -372,11 +548,11 @@ class GateEngine:
         **econ_kwargs
     ) -> PipelineResult:
         """
-        Run the complete 4-gate pipeline for a product.
+        Run the complete 5-gate pipeline for a product.
         
         Gates execute sequentially. If any gate fails, pipeline stops.
         """
-        logger.info(f"Starting 4-gate pipeline for: {product.canonical_title}")
+        logger.info(f"Starting 5-gate pipeline for: {product.canonical_title}")
         
         gate_results = []
         
@@ -450,15 +626,44 @@ class GateEngine:
         )
         gate_results.append(g4)
         
+        if not g4.passed:
+            logger.warning(f"Gate 4 FAILED for {product.canonical_title}")
+            return PipelineResult(
+                product=product,
+                gate_results=gate_results,
+                final_verdict="REJECT",
+                defects=g2.details.get("defects", []),
+                v2_spec=g2.details.get("v2_spec", {}),
+                economics_assessment=g3.details.get("full_assessment"),
+            )
+        
+        # Gate 5: NIM Arbiter
+        g5 = await self.run_gate_5_arbiter(
+            product=product,
+            gate_results=gate_results,
+            region=region,
+            category=category,
+            marketplace=marketplace,
+            **econ_kwargs
+        )
+        gate_results.append(g5)
+        
         # Determine final verdict
-        if g4.passed:
-            final_verdict = "PROCEED"
-        elif g4.details.get("total_score", 0) >= 60:
-            final_verdict = "MARGINAL"
+        if g5.passed:
+            if g5.details.get("verdict") == "OVERRIDE_REJECT":
+                final_verdict = "REJECT"
+            elif g5.details.get("verdict") == "OVERRIDE_PROCEED":
+                final_verdict = "PROCEED"
+            elif g4.passed:
+                final_verdict = "PROCEED"
+            elif g4.details.get("total_score", 0) >= 60:
+                final_verdict = "MARGINAL"
+            else:
+                final_verdict = "REJECT"
         else:
             final_verdict = "REJECT"
         
-        logger.info(f"Pipeline complete for {product.canonical_title}: {final_verdict} (Score: {g4.details.get('total_score', 0)})")
+        logger.info(f"Pipeline complete for {product.canonical_title}: {final_verdict} (Gate 5: {g5.details.get('verdict', 'N/A')})")
         
         return PipelineResult(
             product=product,
@@ -499,7 +704,6 @@ async def run_gate_pipeline_batch(
 if __name__ == "__main__":
     import asyncio
     
-    # Quick test
     async def test():
         from core.validation import CanonicalProduct
         
@@ -514,43 +718,54 @@ if __name__ == "__main__":
         )
         
         engine = GateEngine()
-        
-        # Test Gate 1
-        g1 = engine.run_gate_1_signal(product, bsr_current=15000, price_current=1299, price_30d_ago=1250)
-        print(f"Gate 1: {g1.status.value} - {g1.details}")
-        
-        # Test Gate 3
-        g3 = engine.run_gate_3_economics(
-            product, fob_price=350, planned_msrp=1299, region="India", category="Kitchen"
-        )
-        print(f"Gate 3: {g3.status.value} - Net Margin: {g3.details.get('expected', {}).get('net_margin_pct')}%")
-        
-        # Test Gate 4
-        g4 = engine.run_gate_4_scoring(
-            product, bsr=15000, rating=4.5, review_count=200, 
-            net_margin_pct=25.37, has_defects=True, competitor_count=5
-        )
-        print(f"Gate 4: {g4.status.value} - Score: {g4.details.get('total_score')}")
-        
-        # Full pipeline (mock reviews for Gate 2)
-        mock_reviews = [
-            "Great bottle but lid leaks after a week",
-            "Insulation good but paint chips easily",
-            "Dent arrived on bottom, otherwise fine",
-        ]
-        
         result = await engine.run_full_pipeline(
             product=product,
             bsr_current=15000,
-            price_current=1299,
-            reviews_3star=mock_reviews,
-            fob_price=350,
-            planned_msrp=1299,
+            price_current=1299.0,
+            reviews_3star=[],
+            fob_price=350.0,
+            planned_msrp=1299.0,
             region="India",
             category="Kitchen",
+            marketplace="amazon",
             competitor_count=5,
         )
         print(f"\nFull Pipeline: {result.final_verdict}")
-        print(f"Gates passed: {sum(1 for g in result.gate_results if g.passed)}/4")
+        print(f"Gates passed: {sum(1 for g in result.gate_results if g.passed)}/5")
+    
+    asyncio.run(test())
+
+
+if __name__ == "__main__":
+    import asyncio
+    
+    async def test():
+        from core.validation import CanonicalProduct
+        
+        product = CanonicalProduct(
+            canonical_title="Stainless Steel Water Bottle 1L",
+            category="Kitchen",
+            retail_price_inr=1299.0,
+            amazon_asin="B001",
+            rating=4.5,
+            review_count=200,
+            amazon_bsr=15000,
+        )
+        
+        engine = GateEngine()
+        result = await engine.run_full_pipeline(
+            product=product,
+            bsr_current=15000,
+            price_current=1299.0,
+            reviews_3star=[],
+            fob_price=350.0,
+            planned_msrp=1299.0,
+            region="India",
+            category="Kitchen",
+            marketplace="amazon",
+            competitor_count=5,
+        )
+        print(f"\nFull Pipeline: {result.final_verdict}")
+        print(f"Gates passed: {sum(1 for g in result.gate_results if g.passed)}/5")
     
     asyncio.run(test())

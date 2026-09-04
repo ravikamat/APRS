@@ -8,7 +8,7 @@ Aggregates emerging e-commerce trend signals across:
 4. Meta Ad Library public patterns (high ad spend product categories)
 
 Integrates lightweight anti-bot resilience and records structured signals into SQLite SSOT.
-All outputs are validated by AI Supervisor for quality assurance.
+All outputs are validated by deterministic quality checks.
 """
 import os
 import sys
@@ -29,7 +29,6 @@ if str(_ROOT) not in sys.path:
 from core.database import record_trend_signal, get_connection, get_seed_keywords, get_discovered_sources, update_source_usage, record_seed_keyword
 from core.utils import normalize_region
 from tools.adapters.base_adapter import BaseSourceAdapter, SourceHealth
-from tools.ai_supervisor import get_supervisor
 
 logger = logging.getLogger("aprs.trend_scout")
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s — %(message)s")
@@ -203,32 +202,24 @@ class OpenWebTrendScout(BaseSourceAdapter):
         Runs comprehensive multi-source scouting across Google Trends, Reddit, and dynamically
         discovered sources. Seeds and communities are loaded from DB first; falls back to
         hardcoded lists only if DB is empty. Discovered keywords are fed back as new seeds.
-        All outputs are validated by AI Supervisor for quality assurance.
+        All outputs are validated by deterministic quality checks.
         """
         import time as _time
         all_signals = []
         norm_region = normalize_region(region)
         
-        # Register with AI Supervisor for active monitoring
-        supervisor = get_supervisor()
-        task_id = supervisor.register_task("search_products", f"trend_harvest_{region}", region=region)
-        
-        with supervisor.supervise(task_id) as task:
-            all_signals = []
-            norm_region = normalize_region(region)
-
-            # ── Load dynamic seeds from DB, fallback to hardcoded ────────────────
-            db_seeds = get_seed_keywords(region=norm_region, limit=20)
-            if db_seeds:
-                seeds = [s["keyword"] for s in db_seeds]
-                # Mark seeds as used
-                for s in db_seeds[:4]:
-                    try:
-                        update_seed_usage(s["seed_id"])
-                    except Exception:
-                        pass
-            else:
-                seeds = VIRAL_SEED_ROOTS.get(norm_region, VIRAL_SEED_ROOTS.get("India", []))
+        # Load dynamic seeds from DB, fallback to hardcoded
+        db_seeds = get_seed_keywords(region=norm_region, limit=20)
+        if db_seeds:
+            seeds = [s["keyword"] for s in db_seeds]
+            # Mark seeds as used
+            for s in db_seeds[:4]:
+                try:
+                    update_seed_usage(s["seed_id"])
+                except Exception:
+                    pass
+        else:
+            seeds = VIRAL_SEED_ROOTS.get(norm_region, VIRAL_SEED_ROOTS.get("India", []))
 
             # 1. Google Autocomplete Search Breakout (using dynamic seeds)
             for seed in seeds[:6]:
@@ -323,10 +314,7 @@ class OpenWebTrendScout(BaseSourceAdapter):
                 if len(recorded_signals) >= max_signals:
                     break
 
-            # Set collected data for AI Supervisor validation
-            task.data_collected = {"trends": recorded_signals, "region": region}
-
-            logger.info(f"OpenWebTrendScout: Harvested {len(recorded_signals)} signals for {region} (AI Supervised)")
+            logger.info(f"OpenWebTrendScout: Harvested {len(recorded_signals)} signals for {region}")
             return recorded_signals
 
 

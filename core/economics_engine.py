@@ -72,6 +72,29 @@ class Comprehensive15FactorEconomics:
     # Lead time pass threshold (must arrive within 70% of trend half-life)
     LEAD_TIME_THRESHOLD_PCT = 0.70
 
+    # Live USD/INR rate from OpenBB (updated via set_live_rate)
+    _live_usd_inr_rate: float = 83.0  # default fallback
+
+    @classmethod
+    def set_live_rate(cls, rate: float) -> None:
+        """Update live USD/INR rate from OpenBB MCP.
+        
+        Called by OpenBB client when fetching fresh rates.
+        """
+        cls._live_usd_inr_rate = max(1.0, rate)  # prevent invalid rates
+        # Also update REGIONAL_PROFILES for India
+        try:
+            from config.settings import REGIONAL_PROFILES
+            if "India" in REGIONAL_PROFILES:
+                REGIONAL_PROFILES["India"]["usd_inr_rate"] = cls._live_usd_inr_rate
+        except Exception:
+            pass  # settings may not be loaded yet
+    
+    @classmethod
+    def get_live_rate(cls) -> float:
+        """Get current live USD/INR rate."""
+        return cls._live_usd_inr_rate
+
     @classmethod
     def _get_marketplace_commission(cls, category: str, msrp: float, marketplace: str = "amazon") -> float:
         """Get marketplace commission using config/fees.py."""

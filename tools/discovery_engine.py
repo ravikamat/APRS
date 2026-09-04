@@ -1,13 +1,14 @@
 """
-tools/discovery_engine.py — Discovery Orchestrator for APRS V6 Pro.
+tools/discovery_engine.py — Discovery Orchestrator for APRS V7.
 
-Coordinates multi-marketplace product discovery using Playwright scrapers.
-NO LLM CALLS - purely deterministic orchestration.
+Coordinates multi-marketplace product discovery using WebAgent (NIM 550B driven).
+NO LLM CALLS in orchestration - purely deterministic orchestration.
+LLM is used inside WebAgent for page extraction only.
 
 Pipeline:
 1. Load active niches from DB (dynamic_niches table)
 2. Load seed keywords from DB (dynamic_seed_keywords table)  
-3. For each niche/keyword: scrape Amazon + Flipkart
+3. For each niche/keyword: scrape Amazon + Flipkart + Meesho via WebAgent
 4. Validate & deduplicate via Pydantic + ProductMatcher
 5. Store RawProduct[] -> SQLite
 
@@ -257,23 +258,24 @@ class DiscoveryEngine:
         
         logger.info(f"Single niche discovery: {category} in {region}")
         
-        async with AmazonScraper() as amazon, FlipkartScraper() as flipkart:
-            # Search both marketplaces
-            amazon_results = await amazon.search(category, max_results=max_candidates, max_pages=self.max_pages)
-            flipkart_results = await flipkart.search(category, max_results=max_candidates, max_pages=self.max_pages)
-            
-            all_products = list(amazon_results) + list(flipkart_results)
-            
-            if not all_products:
-                return []
-            
-            # Validate and deduplicate
-            valid_products, errors = self.validator.validate_batch(
-                [p.model_dump() for p in all_products]
-            )
-            
-            canonicals = self.validator.deduplicate(valid_products)
-            return canonicals[:max_candidates]
+        agent = WebAgent()
+        # Search all marketplaces using WebAgent (NIM 550B driven)
+        all_products = await agent.search_all_marketplaces(
+            query=category,
+            max_per_site=max_candidates,
+            region=region,
+        )
+        
+        if not all_products:
+            return []
+        
+        # Validate and deduplicate
+        valid_products, errors = self.validator.validate_batch(
+            [p.model_dump() for p in all_products]
+        )
+        
+        canonicals = self.validator.deduplicate(valid_products)
+        return canonicals[:max_candidates]
 
 
 async def run_discovery_cli(

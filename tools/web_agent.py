@@ -1,4 +1,4 @@
-﻿"""
+"""
 tools/web_agent.py - Universal Browser Agent for APRS V7.
 
 Replaces all individual scrapers (amazon_scraper.py, flipkart_scraper.py) and

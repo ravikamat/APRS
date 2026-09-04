@@ -1,0 +1,966 @@
+"""
+tools/internet_crawler.py — Internet Crawler for APRS V7.
+
+Scans 50+ sources for trend signals, product discoveries, and problem reports.
+Uses WebAgent (NIM 550B driven browser-use) for dynamic sites,
+and direct HTTP for static sources.
+"""
+import asyncio
+import logging
+import re
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from urllib.parse import quote_plus, urljoin
+
+import sys
+
+# Ensure project root on path
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from config.settings import settings
+from core.database import (
+    get_connection, record_trend_signal, get_discovered_sources,
+    record_discovered_source, update_source_usage, record_seed_keyword,
+)
+from tools.web_agent import WebAgent
+from core.llm_router import LLMRouter, LLMTaskType
+
+logger = logging.getLogger("aprs.internet_crawler")
+
+
+# Source definitions with metadata
+TREND_SOURCES = [
+    # Google signals
+    {
+        "id": "google_trends_realtime",
+        "name": "Google Trends Realtime",
+        "url": "https://trends.google.com/trending?geo=IN",
+        "method": "web_agent",
+        "schedule_hours": 2,
+        "category": "trend",
+        "extraction_prompt": "Extract trending search terms, related topics, and breakout queries. Return as JSON array of {keyword, velocity_score, category}.",
+    },
+    {
+        "id": "google_autocomplete",
+        "name": "Google Autocomplete",
+        "url_template": "https://suggestqueries.google.com/complete/search?client=firefox&hl=en-IN&q={query}",
+        "method": "http_json",
+        "schedule_hours": 4,
+        "category": "trend",
+        "seeds": ["best", "viral", "trending", "must have", "buy", "cheap", "deal"],
+    },
+    {
+        "id": "google_shopping_trending",
+        "name": "Google Shopping Trending",
+        "url": "https://shopping.google.com/",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "trend",
+    },
+
+    # YouTube signals
+    {
+        "id": "youtube_trending_india",
+        "name": "YouTube Trending India",
+        "url": "https://www.youtube.com/feed/trending?gl=IN",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "trend",
+    },
+    {
+        "id": "youtube_product_reviews",
+        "name": "YouTube Product Reviews",
+        "url_template": "https://www.youtube.com/results?search_query={query}+review+2026",
+        "method": "web_agent",
+        "schedule_hours": "on_demand",
+        "category": "trend",
+    },
+
+    # Reddit signals
+    {
+        "id": "reddit_indiabuy",
+        "name": "r/IndiaBuy",
+        "url": "https://www.reddit.com/r/IndiaBuy/top/?t=week",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_amazonfinds",
+        "name": "r/amazonfinds",
+        "url": "https://www.reddit.com/r/amazonfinds/top/?t=week",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_tiktokmademebuyit",
+        "name": "r/tiktokmademebuyit",
+        "url": "https://www.reddit.com/r/tiktokmademebuyit/top/?t=week",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_indiabeautydeals",
+        "name": "r/IndianBeautyDeals",
+        "url": "https://www.reddit.com/r/IndianBeautyDeals/top/?t=week",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_frugalmalefashion",
+        "name": "r/frugalmalefashion",
+        "url": "https://www.reddit.com/r/frugalmalefashion/top/?t=week",
+        "method": "web_agent",
+        "schedule_hours": 8,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_buyitforlife",
+        "name": "r/BuyItForLife",
+        "url": "https://www.reddit.com/r/BuyItForLife/new/",
+        "method": "web_agent",
+        "schedule_hours": 12,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_diy",
+        "name": "r/DIY",
+        "url": "https://www.reddit.com/r/DIY/top/?t=week",
+        "method": "web_agent",
+        "schedule_hours": 12,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_homeimprovement",
+        "name": "r/HomeImprovement",
+        "url": "https://www.reddit.com/r/HomeImprovement/new/",
+        "method": "web_agent",
+        "schedule_hours": 12,
+        "category": "trend",
+    },
+    {
+        "id": "reddit_malelifestyle",
+        "name": "r/malelifestyle",
+        "url": "https://www.reddit.com/r/malelifestyle/top/?t=week",
+        "method": "web_agent",
+        "schedule_hours": 12,
+        "category": "trend",
+    },
+
+    # Social Commerce signals
+    {
+        "id": "twitter_viral_india",
+        "name": "Twitter Viral India",
+        "url": "https://twitter.com/search?q=viral+product+india&f=live",
+        "method": "web_agent",
+        "schedule_hours": 4,
+        "category": "trend",
+    },
+    {
+        "id": "twitter_amazon_deals",
+        "name": "Twitter Amazon Deals",
+        "url": "https://twitter.com/search?q=amazon+india+deal+OR+flipkart+viral&f=live",
+        "method": "web_agent",
+        "schedule_hours": 4,
+        "category": "trend",
+    },
+
+    # Macro / Commodity signals
+    {
+        "id": "worldmonitor_commodities",
+        "name": "WorldMonitor Commodities",
+        "endpoint": "wm-mcp://commodity.worldmonitor.app",
+        "method": "mcp",
+        "schedule_hours": 12,
+        "category": "macro",
+    },
+    {
+        "id": "worldmonitor_macro_india",
+        "name": "WorldMonitor India Macro",
+        "endpoint": "wm-mcp://india.worldmonitor.app",
+        "method": "mcp",
+        "schedule_hours": 12,
+        "category": "macro",
+    },
+
+    # OpenBB financial data
+    {
+        "id": "openbb_usd_inr",
+        "name": "OpenBB USD/INR",
+        "call": "obb.currency.price.historical(symbol='USDINR=X')",
+        "method": "mcp",
+        "schedule_hours": 24,
+        "category": "macro",
+    },
+    {
+        "id": "openbb_cpi_india",
+        "name": "OpenBB India CPI",
+        "call": "obb.economy.price.cpi(country='india')",
+        "method": "mcp",
+        "schedule_hours": 168,
+        "category": "macro",
+    },
+]
+
+
+PRODUCT_SOURCES = [
+    # Primary Indian marketplaces
+    {
+        "id": "amazon_in_search",
+        "name": "Amazon India Search",
+        "method": "web_agent",
+        "url_template": "https://www.amazon.in/s?k={query}",
+        "schedule": "on_demand",
+        "category": "product",
+    },
+    {
+        "id": "amazon_in_movers_shakers",
+        "name": "Amazon India Movers & Shakers",
+        "url": "https://www.amazon.in/gp/movers-and-shakers/",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "product",
+    },
+    {
+        "id": "amazon_in_bestsellers",
+        "name": "Amazon India Bestsellers",
+        "url": "https://www.amazon.in/gp/bestsellers/",
+        "method": "web_agent",
+        "schedule_hours": 24,
+        "category": "product",
+    },
+    {
+        "id": "flipkart_search",
+        "name": "Flipkart Search",
+        "method": "web_agent",
+        "url_template": "https://www.flipkart.com/search?q={query}",
+        "schedule": "on_demand",
+        "category": "product",
+    },
+    {
+        "id": "flipkart_trending",
+        "name": "Flipkart Trending",
+        "url": "https://www.flipkart.com/store/trending-now",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "product",
+    },
+    {
+        "id": "meesho_trending",
+        "name": "Meesho Trending",
+        "url": "https://www.meesho.com/collections/trending",
+        "method": "web_agent",
+        "schedule_hours": 6,
+        "category": "product",
+    },
+    {
+        "id": "meesho_search",
+        "name": "Meesho Search",
+        "method": "web_agent",
+        "url_template": "https://www.meesho.com/search?q={query}",
+        "schedule": "on_demand",
+        "category": "product",
+    },
+
+    # Regional / niche Indian platforms
+    {
+        "id": "jiomart_trending",
+        "name": "JioMart Trending",
+        "url": "https://www.jiomart.com/",
+        "method": "web_agent",
+        "schedule_hours": 24,
+        "category": "product",
+    },
+    {
+        "id": "tatacliq",
+        "name": "TataCLiQ",
+        "url": "https://www.tatacliq.com/",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "myntra",
+        "name": "Myntra",
+        "url": "https://www.myntra.com/",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "nykaa",
+        "name": "Nykaa",
+        "url": "https://www.nykaa.com/",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+
+    # D2C brands (track launches + viral products)
+    {
+        "id": "mamaearth_new",
+        "name": "Mamaearth New Launches",
+        "url": "https://mamaearth.in/pages/new-launches",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "wow_skin_new",
+        "name": "WOW Skin New Launches",
+        "url": "https://www.wowskin.com/collections/new-launches",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "bombay_shaving_new",
+        "name": "Bombay Shaving Company New Arrivals",
+        "url": "https://www.bombayshavingcompany.com/collections/new-arrivals",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+
+    # International (price benchmarking + trend lead indicator)
+    {
+        "id": "alibaba_bestsellers",
+        "name": "Alibaba Bestsellers",
+        "url": "https://www.alibaba.com/trade/search?SearchText={query}",
+        "method": "web_agent",
+        "schedule": "on_demand",
+        "category": "supplier",
+    },
+    {
+        "id": "aliexpress_trending",
+        "name": "AliExpress Trending",
+        "url": "https://www.aliexpress.com/wholesale?SearchText={query}",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "temu_trending",
+        "name": "Temu Trending",
+        "url": "https://www.temu.com/",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "amazon_us_movers_shakers",
+        "name": "Amazon US Movers & Shakers",
+        "url": "https://www.amazon.com/gp/movers-and-shakers/",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+
+    # Wholesale / Supplier platforms
+    {
+        "id": "indiamart_search",
+        "name": "IndiaMART Search",
+        "url": "https://dir.indiamart.com/search.mp?ss={query}",
+        "method": "http_json",
+        "schedule": "on_demand",
+        "category": "supplier",
+    },
+    {
+        "id": "tradeindia",
+        "name": "TradeIndia",
+        "url": "https://www.tradeindia.com/search.html?search_str={query}",
+        "method": "web_agent",
+        "schedule": "on_demand",
+        "category": "supplier",
+    },
+    {
+        "id": "exportersindia",
+        "name": "ExportersIndia",
+        "url": "https://www.exportersindia.com/search/?search={query}",
+        "method": "web_agent",
+        "schedule": "on_demand",
+        "category": "supplier",
+    },
+
+    # Niche platforms
+    {
+        "id": "etsy_trending",
+        "name": "Etsy Trending",
+        "url": "https://www.etsy.com/",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "shopee_trending",
+        "name": "Shopee Trending",
+        "url": "https://shopee.in/ OR shopee.com",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+    {
+        "id": "daraz",
+        "name": "Daraz",
+        "url": "https://www.daraz.com/",
+        "method": "web_agent",
+        "schedule_hours": 168,
+        "category": "product",
+    },
+]
+
+
+PROBLEM_SOURCES = [
+    {
+        "id": "amazon_qa",
+        "name": "Amazon Q&A Sections",
+        "url_template": "https://www.amazon.in/ask/questions/asin/{asin}/",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "amazon_3star_reviews",
+        "name": "Amazon 3-Star Reviews",
+        "url_template": "https://www.amazon.in/product-reviews/{asin}/?filterByStar=three_star",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "flipkart_reviews",
+        "name": "Flipkart Reviews",
+        "url_template": "https://www.flipkart.com/product-reviews/{product_id}",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "quora_product_questions",
+        "name": "Quora Product Questions",
+        "url_template": "https://www.quora.com/search?q={query}+product",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "youtube_product_fail_comments",
+        "name": "YouTube Product Fail Comments",
+        "url_template": "https://www.youtube.com/results?search_query={query}+problem+OR+bad+OR+disappointed",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "reddit_complaints_per_niche",
+        "name": "Reddit Complaints Per Niche",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "flipkart_reviews",
+        "name": "Flipkart Reviews",
+        "url_template": "https://www.flipkart.com/product-reviews/{product_id}",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "trustpilot_brand",
+        "name": "Trustpilot Brand Reviews",
+        "url_template": "https://www.trustpilot.com/review/{brand_domain}",
+        "method": "web_agent",
+        "category": "problem",
+    },
+    {
+        "id": "indiamart_product_queries",
+        "name": "IndiaMART Product Queries",
+        "url": "https://dir.indiamart.com/search.mp?ss={query}&biz=1",
+        "method": "http_json",
+        "category": "problem",
+    },
+]
+
+
+@dataclass
+class CrawlResult:
+    """Result of a crawl operation."""
+    source_id: str
+    source_name: str
+    source_type: str  # trend, product, problem, supplier, macro
+    signals_found: int = 0
+    products_found: int = 0
+    suppliers_found: int = 0
+    errors: List[str] = field(default_factory=list)
+    duration_ms: int = 0
+    status: str = "success"  # success, partial, failed
+
+
+class InternetCrawler:
+    """
+    Master Internet Crawler for APRS V7.
+
+    Scans 50+ sources across:
+    - Trend signals (Google, YouTube, Reddit, Twitter, Macro)
+    - Product discovery (Amazon, Flipkart, Meesho, JioMart, etc.)
+    - Problem mining (Reviews, Q&A, Reddit, YouTube)
+    - Supplier discovery (IndiaMART, Alibaba, TradeIndia)
+    - Macro signals (WorldMonitor, OpenBB)
+
+    Features:
+    - WebAgent (NIM 550B driven browser-use) for dynamic sites
+    - Direct HTTP for APIs and static content
+    - MCP clients for WorldMonitor, OpenBB, Agent-Reach
+    - Automatic source discovery and yield tracking
+    - Source health monitoring and auto-deactivation
+    """
+
+    def __init__(self):
+        self.web_agent = WebAgent()
+        self.llm_router = None  # Lazy init
+        self._session = None
+
+        # Track source health
+        self.source_stats = {}
+
+    async def __aenter__(self):
+        await self._init_session()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self._close_session()
+
+    async def _init_session(self):
+        import aiohttp
+        self._session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+            connector=aiohttp.TCPConnector(limit=20),
+            headers={"User-Agent": settings.scraper_user_agent}
+        )
+
+    async def _close_session(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
+
+    def _get_llm_router(self):
+        if self.llm_router is None:
+            from core.llm_router import LLMRouter
+            self.llm_router = LLMRouter()
+        return self.llm_router
+
+    async def crawl_cycle(self) -> Dict[str, Any]:
+        """
+        Run a complete crawl cycle across all source types.
+
+        Returns summary of signals, products, and suppliers found.
+        """
+        start_time = datetime.utcnow()
+        logger.info("Starting internet crawl cycle")
+
+        results = {
+            "signals_found": 0,
+            "products_found": 0,
+            "suppliers_found": 0,
+            "problems_found": 0,
+            "sources_scanned": 0,
+            "sources_failed": 0,
+            "duration_ms": 0,
+            "by_source_type": {},
+        }
+
+        # 1. Crawl trend sources
+        trend_results = await self._crawl_trend_sources()
+        results["signals_found"] += trend_results["signals_found"]
+        results["sources_scanned"] += trend_results["sources_scanned"]
+        results["by_source_type"]["trend"] = trend_results
+
+        # 2. Crawl product sources (on-demand, not every cycle)
+        # Only run if niches have been updated
+        niches = get_dynamic_niches(active_only=True, limit=1)
+        if niches:
+            product_results = await self._crawl_product_sources()
+            results["products_found"] += product_results["products_found"]
+            results["sources_scanned"] += product_results["sources_scanned"]
+            results["by_source_type"]["product"] = product_results
+
+        # 3. Crawl problem sources (for products that passed Gate 3)
+        problem_results = await self._crawl_problem_sources()
+        results["problems_found"] += problem_results["problems_found"]
+        results["sources_scanned"] += problem_results["sources_scanned"]
+        results["by_source_type"]["problem"] = problem_results
+
+        # 4. Crawl supplier sources (for products that passed Gate 4)
+        supplier_results = await self._crawl_supplier_sources()
+        results["suppliers_found"] += supplier_results["suppliers_found"]
+        results["sources_scanned"] += supplier_results["sources_scanned"]
+        results["by_source_type"]["supplier"] = supplier_results
+
+        # 4. Crawl macro sources
+        macro_results = await self._crawl_macro_sources()
+        results["by_source_type"]["macro"] = macro_results
+
+        # Update source health
+        await self._update_source_health()
+
+        results["duration_ms"] = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+        logger.info(f"Crawl cycle complete in {results['duration_ms']}ms: {results}")
+
+        return results
+
+    async def _crawl_trend_sources(self) -> Dict[str, Any]:
+        """Crawl all trend signal sources."""
+        logger.info("Crawling trend sources...")
+        results = {"signals_found": 0, "sources_scanned": 0, "sources_failed": 0}
+
+        for source in TREND_SOURCES:
+            try:
+                if source["method"] == "web_agent":
+                    signals = await self._crawl_web_agent_source(source)
+                elif source["method"] == "http_json":
+                    signals = await self._crawl_http_json_source(source)
+                elif source["method"] == "mcp":
+                    signals = await self._crawl_mcp_source(source)
+                else:
+                    continue
+
+                # Record signals to database
+                for signal in signals:
+                    record_trend_signal(
+                        platform=signal.get("platform", source["id"]),
+                        keyword=signal["keyword"],
+                        category=signal.get("category", "General"),
+                        region=signal.get("region", "India"),
+                        search_volume_est=signal.get("search_volume_est", 0),
+                        velocity_score=signal.get("velocity_score", 50),
+                        longevity_days=signal.get("longevity_days", 14),
+                        raw_json=signal,
+                    )
+                    results["signals_found"] += 1
+
+                results["sources_scanned"] += 1
+                update_source_usage(source["id"], yielded_results=len(signals) > 0)
+
+            except Exception as e:
+                logger.error(f"Failed to crawl {source['id']}: {e}")
+                results["sources_failed"] += 1
+                await asyncio.sleep(1)  # Brief pause before next source
+
+        return results
+
+    async def _crawl_web_agent_source(self, source: Dict) -> List[Dict]:
+        """Crawl a source using WebAgent (NIM 550B driven)."""
+        agent = WebAgent()
+
+        # Build prompt based on source
+        if "extraction_prompt" in source:
+            prompt = source["extraction_prompt"]
+        else:
+            prompt = "Extract trending topics, product names, or viral keywords from this page. Return as JSON array."
+
+        if "url" in source:
+            url = source["url"]
+        elif "url_template" in source:
+            # Use first seed keyword
+            seeds = get_seed_keywords(limit=1)
+            query = seeds[0]["keyword"] if seeds else "trending"
+            url = source["url_template"].format(query=quote_plus(query))
+        else:
+            return []
+
+        logger.info(f"[WebAgent] Crawling {source['id']}: {url}")
+
+        try:
+            # Use WebAgent's extract_from_url for generic extraction
+            result = await agent.extract_from_url(
+                url=url,
+                schema={"items": "array"},
+                task_description=f"Extract trending keywords/products from {source['name']}. Return as JSON array of objects with fields: keyword, velocity_score, category, url, source_platform."
+            )
+
+            # Parse result
+            if isinstance(result, dict) and "items" in result:
+                return result["items"]
+            elif isinstance(result, list):
+                return result
+            else:
+                return []
+
+        except Exception as e:
+            logger.error(f"WebAgent failed for {source['id']}: {e}")
+            return []
+
+    async def _crawl_http_json_source(self, source: Dict) -> List[Dict]:
+        """Crawl a source using direct HTTP JSON API."""
+        if not self._session:
+            import aiohttp
+            self._session = aiohttp.ClientSession()
+
+        if "url_template" in source:
+            seeds = get_seed_keywords(limit=5)
+            all_signals = []
+            for seed in seeds:
+                query = seed["keyword"]
+                url = source["url_template"].format(query=quote_plus(query))
+
+                try:
+                    async with self._session.get(url, timeout=10) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            # Parse based on source format
+                            if "suggestions" in data:
+                                for s in data["suggestions"]:
+                                    all_signals.append({
+                                        "keyword": s.get("value", s),
+                                        "velocity_score": 50,
+                                        "category": "Autocomplete",
+                                        "platform": "google",
+                                    })
+                except Exception as e:
+                    logger.debug(f"HTTP JSON source failed: {e}")
+
+        return all_signals
+
+    async def _crawl_mcp_source(self, source: Dict) -> List[Dict]:
+        """Crawl a source via MCP (WorldMonitor, OpenBB, etc.)."""
+        # Placeholder for MCP integration
+        # Would call appropriate MCP server
+        return []
+
+    async def _crawl_product_sources(self) -> Dict[str, Any]:
+        """Crawl product sources for active niches."""
+        from tools.discovery_engine import DiscoveryEngine
+
+        engine = DiscoveryEngine()
+        result = await engine.run_discovery_batch(
+            region="India",
+            max_niches=settings.batch_niche_limit,
+            max_candidates_per_niche=settings.batch_max_candidates,
+            use_seed_keywords=True,
+        )
+
+        return {
+            "products_found": result.get("total_canonical_products", 0),
+            "sources_scanned": result.get("niches_processed", 0),
+        }
+
+    async def _crawl_problem_sources(self) -> Dict[str, Any]:
+        """Crawl problem sources for products that passed Gate 3."""
+        from tools.problem_miner import ProblemMiner
+
+        # Get products that passed Gate 3 (economics)
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT p.product_id, p.name, p.amazon_asin, p.flipkart_id
+            FROM master_products p
+            JOIN product_gate_progress g ON p.product_id = g.product_id
+            WHERE g.gate_number = 3 AND g.status = 'PASS'
+            AND g.completed_at >= datetime('now', '-7 days')
+        """)
+        products = [dict(r) for r in cur.fetchall()]
+        conn.close()
+
+        if not products:
+            return {"problems_found": 0, "sources_scanned": 0}
+
+        miner = ProblemMiner()
+        total_problems = 0
+        sources_scanned = 0
+
+        for product in products[:20]:  # Limit per cycle
+            try:
+                result = await miner.mine_product(
+                    product_id=product["product_id"],
+                    asin=product.get("amazon_asin"),
+                    flipkart_id=product.get("flipkart_id"),
+                )
+                total_problems += result.get("opportunities_found", 0)
+                sources_scanned += 1
+            except Exception as e:
+                logger.error(f"Problem mining failed for {product['product_id']}: {e}")
+
+        return {"problems_found": total_problems, "sources_scanned": sources_scanned}
+
+    async def _crawl_supplier_sources(self) -> Dict[str, Any]:
+        """Crawl supplier sources for products that passed Gate 4."""
+        from tools.supplier_agent import SupplierAgent
+
+        agent = SupplierAgent()
+        result = await agent.run_batch(limit=10)
+
+        return {
+            "suppliers_found": result.get("suppliers_found", 0),
+            "suppliers_verified": result.get("suppliers_verified", 0),
+            "sources_scanned": result.get("sources_scanned", 0),
+        }
+
+    async def _crawl_macro_sources(self) -> Dict[str, Any]:
+        """Crawl macro sources (WorldMonitor, OpenBB)."""
+        results = {"signals_found": 0}
+
+        # WorldMonitor commodity prices
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get("http://localhost:3001/mcp/commodity") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Store commodity prices for economics engine
+                        pass
+        except Exception as e:
+            logger.debug(f"WorldMonitor unavailable: {e}")
+
+        # OpenBB USD/INR rate
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get("http://localhost:3002/currency/USDINR") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        rate = data.get("rate")
+                        if rate:
+                            Comprehensive15FactorEconomics.set_live_rate(rate)
+        except Exception as e:
+            logger.debug(f"OpenBB unavailable: {e}")
+
+        return results
+
+    async def _update_source_health(self):
+        """Update source health metrics and deactivate low-yield sources."""
+        from core.database import get_discovered_sources
+
+        sources = get_discovered_sources(active_only=True, limit=500)
+
+        for src in sources:
+            source_id = src.get("source_id")
+            if not source_id:
+                continue
+
+            used = src.get("times_used", 0)
+            yielded = src.get("times_yielded_results", 0)
+
+            if used >= 3 and yielded == 0:
+                # Deactivate after 3 consecutive empty runs
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE discovered_sources SET is_active = 0 WHERE source_id = ?",
+                    (source_id,)
+                )
+                conn.commit()
+                conn.close()
+                logger.info(f"Deactivated source {source_id} after 3 empty runs")
+
+
+# Source Discovery Engine
+
+class SourceDiscoveryEngine:
+    """
+    Discovers NEW sources automatically by analyzing content from existing sources.
+    """
+
+    def __init__(self):
+        self.llm_router = None
+
+    async def discover_new_sources_from_content(self, page_content: str, parent_url: str) -> List[Dict]:
+        """
+        Use NIM 550B to analyze page content and identify new sources.
+        """
+        if not self.llm_router:
+            from core.llm_router import LLMRouter
+            self.llm_router = LLMRouter()
+
+        prompt = f"""You are analyzing a web page for an e-commerce product research tool.
+Parent URL: {parent_url}
+
+From this content, identify any NEW web pages, communities, forums, marketplaces,
+or data sources that would be useful for:
+1. Finding viral/trending products in India
+2. Understanding what problems consumers face with products
+3. Finding product suppliers in India or China
+
+Return JSON array of new sources:
+[{{"url": "...", "source_type": "trend|problem|product|supplier",
+   "reason": "why useful", "schedule": "every_6h|daily|weekly"}}
+
+Page content:
+{page_content[:3000]}"""
+
+        response = await self.llm_router.chat(
+            messages=[
+                {"role": "system", "content": "You are an autonomous source discovery agent."},
+                {"role": "user", "content": prompt}
+            ],
+            agent_name="source_discovery",
+            task_type="deep_reasoning",
+            json_mode=True,
+            max_tokens=1000,
+        )
+
+        import json
+        try:
+            new_sources = json.loads(response.text)
+            for source in new_sources:
+                record_discovered_source(
+                    url=source["url"],
+                    source_type=source["source_type"],
+                    description=source.get("reason", ""),
+                    region="India",
+                    discovered_by="source_discovery_engine",
+                )
+            return new_sources
+        except Exception as e:
+            logger.warning(f"Source discovery failed: {e}")
+            return []
+
+    async def deactivate_low_yield_sources(self):
+        """Deactivate sources with 3 consecutive empty runs."""
+        from core.database import get_discovered_sources
+
+        sources = get_discovered_sources(active_only=True, limit=500)
+
+        for src in get_discovered_sources(active_only=True, limit=500):
+            if src.get("times_used", 0) >= 3 and src.get("times_yielded_results", 0) == 0:
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE discovered_sources SET is_active = 0 WHERE source_id = ?",
+                    (src["source_id"],)
+                )
+                conn.commit()
+                conn.close()
+                logger.info(f"Deactivated source {src['source_id']} after 3 empty runs")
+
+
+# CLI Entry Point
+
+async def run_crawl_cycle() -> Dict[str, Any]:
+    """Run a single crawl cycle and return results."""
+    async with InternetCrawler() as crawler:
+        return await crawler.crawl_cycle()
+
+
+async def run_continuous_crawler(interval_hours: int = 1):
+    """Run crawler continuously with specified interval."""
+    logger.info(f"Starting continuous crawler (interval: {interval_hours}h)")
+
+    while True:
+        try:
+            async with InternetCrawler() as crawler:
+                result = await crawler.crawl_cycle()
+                logger.info(f"Crawl cycle complete: {result}")
+        except Exception as e:
+            logger.error(f"Crawl cycle failed: {e}")
+
+        await asyncio.sleep(interval_hours * 3600)
+
+
+if __name__ == "__main__":
+    async def test():
+        async with InternetCrawler() as crawler:
+            result = await crawler.crawl_cycle()
+            print(f"Crawl cycle result: {result}")
+
+    asyncio.run(test())

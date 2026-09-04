@@ -114,6 +114,60 @@ class Settings(BaseSettings):
     nim_temperature: float = Field(default=0.1, validation_alias="NIM_TEMPERATURE")
     nim_max_tokens: int = Field(default=4096, validation_alias="NIM_MAX_TOKENS")
 
+    # ── Groq Free Tier (Llama-3.3-70B / Mixtral-8x7B) ────────────────────────
+    groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
+    groq_model: str = Field(
+        default="llama-3.3-70b-versatile",
+        validation_alias="GROQ_MODEL"
+    )
+    groq_base_url: str = Field(
+        default="https://api.groq.com/openai/v1",
+        validation_alias="GROQ_BASE_URL"
+    )
+    groq_enabled: bool = Field(default=True, validation_alias="GROQ_ENABLED")
+    groq_temperature: float = Field(default=0.1, validation_alias="GROQ_TEMPERATURE")
+    groq_max_tokens: int = Field(default=4096, validation_alias="GROQ_MAX_TOKENS")
+
+    # ── Kimi-K3 (Local C99 binary, 2.78T params) ──────────────────────────────
+    kimi_enabled: bool = Field(default=False, validation_alias="KIMI_ENABLED")
+    kimi_model_path: str = Field(
+        default=r"F:\Yuki_1.0\data\models\Qwen3.8-27B-UD-IQ1_S.gguf",
+        validation_alias="KIMI_MODEL_PATH"
+    )
+    kimi_trunk_path: str = Field(
+        default=r"F:\Yuki_1.0\data\models\Qwen3.8-27B-UD-IQ1_S.gguf",
+        validation_alias="KIMI_TRUNK_PATH"
+    )
+    kimi_preset: str = Field(
+        default="laptop",
+        validation_alias="KIMI_PRESET"
+    )
+    kimi_temperature: float = Field(default=0.1, validation_alias="KIMI_TEMPERATURE")
+    kimi_max_tokens: int = Field(default=100, validation_alias="KIMI_MAX_TOKENS")
+
+    # ── LLM Tier Controls ─────────────────────────────────────────────────────
+    llm_tier_1_enabled: bool = Field(default=True, validation_alias="LLM_TIER_1_ENABLED")
+    llm_tier_2_enabled: bool = Field(default=True, validation_alias="LLM_TIER_2_ENABLED")
+    llm_tier_3_enabled: bool = Field(default=True, validation_alias="LLM_TIER_3_ENABLED")
+    llm_tier_4_enabled: bool = Field(default=False, validation_alias="LLM_TIER_4_ENABLED")
+    llm_tier_5_manual_fallback: bool = Field(default=True, validation_alias="LLM_TIER_5_MANUAL_FALLBACK")
+
+    # Per-agent LLM override (bypasses tier ladder)
+    agent_internet_crawler_mode: str = Field(default="auto", validation_alias="AGENT_INTERNET_CRAWLER_MODE")
+    agent_trend_signal_mode: str = Field(default="auto", validation_alias="AGENT_TREND_SIGNAL_MODE")
+    agent_niche_expander_mode: str = Field(default="auto", validation_alias="AGENT_NICHE_EXPANDER_MODE")
+    agent_discovery_mode: str = Field(default="auto", validation_alias="AGENT_DISCOVERY_MODE")
+    agent_problem_miner_mode: str = Field(default="auto", validation_alias="AGENT_PROBLEM_MINER_MODE")
+    agent_gate_engine_mode: str = Field(default="auto", validation_alias="AGENT_GATE_ENGINE_MODE")
+    agent_supplier_mode: str = Field(default="auto", validation_alias="AGENT_SUPPLIER_MODE")
+    agent_outreach_mode: str = Field(default="manual", validation_alias="AGENT_OUTREACH_MODE")
+    agent_learning_mode: str = Field(default="auto", validation_alias="AGENT_LEARNING_MODE")
+    agent_orchestrator_mode: str = Field(default="auto", validation_alias="AGENT_ORCHESTRATOR_MODE")
+
+    # Agent enabled/disabled flags
+    agent_supplier_enabled: bool = Field(default=True, validation_alias="AGENT_SUPPLIER_ENABLED")
+    agent_learning_enabled: bool = Field(default=True, validation_alias="AGENT_LEARNING_ENABLED")
+
     # ── WebAgent (browser-use) ───────────────────────────────────────────────
     web_agent_headless: bool = Field(default=True, validation_alias="WEB_AGENT_HEADLESS")
     web_agent_timeout_s: int = Field(default=180, validation_alias="WEB_AGENT_TIMEOUT_S")
@@ -124,6 +178,39 @@ class Settings(BaseSettings):
         validation_alias="SUPPLIER_PLATFORMS"
     )
     supplier_max_results: int = Field(default=8, validation_alias="SUPPLIER_MAX_RESULTS")
+
+    # ── Evolution-Go (WhatsApp API) ───────────────────────────────────────────
+    evolution_go_url: str = Field(default="http://localhost:8080", validation_alias="EVOLUTION_GO_URL")
+    evolution_go_apikey: str = Field(default="", validation_alias="EVOLUTION_GO_APIKEY")
+    whatsapp_enabled: bool = Field(default=False, validation_alias="WHATSAPP_ENABLED")
+
+    # ── OpenCompany (Visual Orchestration) ────────────────────────────────────
+    opencompany_url: str = Field(default="http://localhost:5678", validation_alias="OPENCOMPANY_URL")
+    opencompany_enabled: bool = Field(default=False, validation_alias="OPENCOMPANY_ENABLED")
+
+    # ── Agent-Reach (MCP Server) ──────────────────────────────────────────────
+    agent_reach_url: str = Field(default="http://localhost:3000", validation_alias="AGENT_REACH_URL")
+    agent_reach_enabled: bool = Field(default=True, validation_alias="AGENT_REACH_ENABLED")
+
+    # ── WorldMonitor (MCP) ────────────────────────────────────────────────────
+    worldmonitor_url: str = Field(default="http://localhost:3001", validation_alias="WORLDMONITOR_URL")
+    worldmonitor_enabled: bool = Field(default=True, validation_alias="WORLDMONITOR_ENABLED")
+
+    # ── OpenBB (MCP) ──────────────────────────────────────────────────────────
+    openbb_url: str = Field(default="http://localhost:3002", validation_alias="OPENBB_URL")
+    openbb_enabled: bool = Field(default=True, validation_alias="OPENBB_ENABLED")
+
+    # ── Agent-Memory (MCP) ────────────────────────────────────────────────────
+    agent_memory_url: str = Field(default="http://localhost:3333", validation_alias="AGENT_MEMORY_URL")
+    agent_memory_enabled: bool = Field(default=True, validation_alias="AGENT_MEMORY_ENABLED")
+
+    # ── CRM ────────────────────────────────────────────────────────────────────
+    crm_url: str = Field(default="http://localhost:3000", validation_alias="CRM_URL")
+    crm_enabled: bool = Field(default=False, validation_alias="CRM_ENABLED")
+
+    # ── Evolution-Go (WhatsApp) ───────────────────────────────────────────────
+    evolution_go_url: str = Field(default="http://localhost:8080", validation_alias="EVOLUTION_GO_URL")
+    evolution_go_apikey: str = Field(default="", validation_alias="EVOLUTION_GO_APIKEY")
 
 
 
