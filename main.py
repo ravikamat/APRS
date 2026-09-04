@@ -12,6 +12,7 @@ Commands:
 import argparse
 import asyncio
 import json
+import os
 import sys
 import subprocess
 from pathlib import Path
@@ -86,7 +87,7 @@ def cmd_web(args):
     print("      Dashboard will be available at http://localhost:8501")
     
     app_path = _ROOT / "web" / "app.py"
-    env = dict(**sys.environ)
+    env = dict(os.environ)
     env["STREAMLIT_SERVER_HEADLESS"] = "true"
     env["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
     

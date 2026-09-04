@@ -124,7 +124,7 @@ class LLMRouter:
     TASK_DEFAULT_TIER = {
         LLMTaskType.GATE4_ARBITER: 1,
         LLMTaskType.GATE5_ARBITER: 1,
-        LLMTaskType.GATE2_DEFECT_MINING: 2,
+        LLMTaskType.GATE2_DEFECT_MINING: 1,  # NIM first → Groq → Ollama fallback
         LLMTaskType.BROWSER_AGENT: 1,
         LLMTaskType.BROWSER_USE_DRIVING: 1,
         LLMTaskType.BULK_CLASSIFICATION: 2,

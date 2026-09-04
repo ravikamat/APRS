@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # ── Ollama (Local LLM) ───────────────────────────────────────────────────
     ollama_url: str = Field(default="http://localhost:11434", validation_alias="OLLAMA_URL")
-    ollama_model: str = Field(default="qwen2.5:14b", validation_alias="OLLAMA_MODEL")
+    ollama_model: str = Field(default="qwen3:latest", validation_alias="OLLAMA_MODEL")
     ollama_fallback_model: str = Field(default="llama3.1:8b", validation_alias="OLLAMA_FALLBACK_MODEL")
     ollama_context_window: int = Field(default=8192, validation_alias="OLLAMA_CONTEXT_WINDOW")
     ollama_temperature: float = Field(default=0.2, validation_alias="OLLAMA_TEMPERATURE")
