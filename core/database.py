@@ -1351,6 +1351,18 @@ def init_product_gates(product_id: str) -> bool:
         print(f"[GATE INIT ERROR]: {e}")
         return False
 
+def reset_product_gates(product_id: str) -> bool:
+    """Reset all gates for a product back to PENDING."""
+    try:
+        conn = get_connection()
+        conn.execute("DELETE FROM product_gate_progress WHERE product_id = ?", (product_id,))
+        conn.commit()
+        conn.close()
+        return init_product_gates(product_id)
+    except Exception as e:
+        print(f"[GATE RESET ERROR]: {e}")
+        return False
+
 def get_gate_status(product_id: str, gate_number: int = None) -> List[Dict[str, Any]]:
     """Get gate progress for a product. If gate_number is None, returns all gates."""
     conn = get_connection()
@@ -2888,6 +2900,188 @@ def get_llm_tier_stats(limit: int = 100) -> List[Dict]:
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+# ── LIVE TABLE COUNTS FOR DASHBOARD ────────────────────────────────────────────
+
+def get_live_table_counts() -> Dict[str, int]:
+    """Returns row counts for all tables — used by live dashboard header."""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    # Get all table names
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    tables = [row[0] for row in cur.fetchall()]
+    
+    counts = {}
+    for table in tables:
+        try:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            counts[table] = cur.fetchone()[0]
+        except Exception:
+            counts[table] = 0
+    
+    conn.close()
+    return counts
+
+
+# ── ENHANCED HUMAN OVERRIDE WITH REASON ────────────────────────────────────────
+
+def set_human_override_with_reason(product_id: str, verdict: str, reason: str, overridden_by: str = "human") -> bool:
+    """Allows human user to override algorithmic verdicts with reasoning AND sync all gates."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        # Update master_products
+        cur.execute('''
+            UPDATE master_products
+            SET human_override_status = ?, status = ?, ai_rejection_reason = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE product_id = ?
+        ''', (verdict, verdict, reason, product_id))
+        
+        # Override all gates to PASS or FAIL
+        gate_status = "OVERRIDDEN_PASS" if verdict in ("PASS", "OVERRIDDEN_PASS") else "OVERRIDDEN_REJECT"
+        for g in range(1, 7):
+            cur.execute('''
+                UPDATE product_gate_progress
+                SET status = ?, blocked_reason = ?, completed_by = ?, completed_at = CURRENT_TIMESTAMP
+                WHERE product_id = ? AND gate_number = ?
+            ''', (gate_status, reason, overridden_by, product_id, g))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[DB Override Error]: {e}")
+        return False
+
+
+# ── OUTREACH DRAFTS FOR PRODUCT ────────────────────────────────────────────────
+
+def get_outreach_drafts_for_product(product_id: str) -> List[Dict]:
+    """Get all outreach drafts for a product (join via supplier)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        SELECT od.*, sp.company_name, sp.supplier_id
+        FROM outreach_drafts od
+        JOIN supplier_profiles sp ON od.supplier_id = sp.supplier_id
+        WHERE sp.product_id = ?
+        ORDER BY od.created_at DESC
+    ''', (product_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def update_outreach_status(draft_id: int, status: str, edited_text: str = None) -> bool:
+    """Update outreach draft status (PENDING, APPROVED, REJECTED, SENT, HOLD)."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        if edited_text is not None:
+            cur.execute('''
+                UPDATE outreach_drafts
+                SET status = ?, email_draft = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE draft_id = ?
+            ''', (status, edited_text, draft_id))
+        else:
+            cur.execute('''
+                UPDATE outreach_drafts
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE draft_id = ?
+            ''', (status, draft_id))
+        
+        conn.commit()
+        success = cur.rowcount > 0
+        conn.close()
+        return success
+    except Exception as e:
+        logger.warning(f"update_outreach_status error: {e}")
+        return False
+
+
+# ── ARCHIVE / SOFT-DELETED PRODUCTS ────────────────────────────────────────────
+
+def get_archive_products(include_restored: bool = False) -> List[Dict]:
+    """Get all soft-deleted products with AI reasoning for recovery review."""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    if include_restored:
+        cur.execute('''
+            SELECT product_id, name, category, region, planned_msrp, net_profit_pct,
+                   is_deleted, deletion_reason, ai_rejection_reason, ai_reasoning,
+                   ai_rejection_category, ai_confidence, updated_at, deleted_at
+            FROM master_products
+            WHERE is_deleted = 1
+            ORDER BY deleted_at DESC
+        ''')
+    else:
+        cur.execute('''
+            SELECT product_id, name, category, region, planned_msrp, net_profit_pct,
+                   is_deleted, deletion_reason, ai_rejection_reason, ai_reasoning,
+                   ai_rejection_category, ai_confidence, updated_at, deleted_at
+            FROM master_products
+            WHERE is_deleted = 1
+            ORDER BY deleted_at DESC
+        ''')
+    
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# ── SWARM AUDIT LOG FOR AGENT COCKPIT ──────────────────────────────────────────
+
+def get_recent_swarm_audit_log(limit: int = 50, agent_name: str = None) -> List[Dict]:
+    """Get recent swarm audit log entries for live agent activity feed."""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    if agent_name:
+        cur.execute(
+            "SELECT * FROM swarm_audit_log WHERE agent_role = ? ORDER BY timestamp DESC LIMIT ?",
+            (agent_name, limit)
+        )
+    else:
+        cur.execute(
+            "SELECT * FROM swarm_audit_log ORDER BY timestamp DESC LIMIT ?",
+            (limit,)
+        )
+    
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def log_swarm_audit(agent_name: str, action: str, details: str = None, 
+                    product_id: str = None, cycle_num: int = None, 
+                    items_processed: int = 0, items_created: int = 0,
+                    duration_ms: int = 0, success: bool = True) -> Optional[int]:
+    """Log an agent execution event to swarm_audit_log for live telemetry."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            INSERT INTO swarm_audit_log (
+                agent_name, action, details, product_id, cycle_num,
+                items_processed, items_created, duration_ms, success
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            agent_name, action, details, product_id, cycle_num,
+            items_processed, items_created, duration_ms, 1 if success else 0
+        ))
+        conn.commit()
+        lid = cur.lastrowid
+        conn.close()
+        return lid
+    except Exception as e:
+        logger.warning(f"log_swarm_audit error: {e}")
+        conn.close()
+        return None
 
 
 if __name__ == "__main__":

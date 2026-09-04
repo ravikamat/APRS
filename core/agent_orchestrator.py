@@ -66,6 +66,7 @@ class AgentConfig:
     """Configuration for an agent."""
     name: str
     enabled: bool = True
+    mode: str = "auto"  # auto | manual | disabled | force_tier:1..5
     interval_seconds: int = 3600  # Default 1 hour
     max_concurrent: int = 1
     timeout_seconds: int = 300
@@ -252,6 +253,22 @@ class AgentOrchestrator:
             if dep_state != AgentState.COMPLETED and dep_state != AgentState.IDLE:
                 return False
         return True
+
+    def set_agent_mode(self, agent_name: str, mode: str):
+        """Set agent operation mode (auto, manual, disabled, force_tier:X)."""
+        if agent_name in self._agent_configs:
+            self._agent_configs[agent_name].mode = mode
+            if mode == "disabled":
+                self._agent_configs[agent_name].enabled = False
+            else:
+                self._agent_configs[agent_name].enabled = True
+            logger.info(f"Agent '{agent_name}' mode updated to: {mode}")
+
+    def set_agent_enabled(self, agent_name: str, enabled: bool):
+        """Enable or disable an agent."""
+        if agent_name in self._agent_configs:
+            self._agent_configs[agent_name].enabled = enabled
+            logger.info(f"Agent '{agent_name}' enabled set to: {enabled}")
     
     async def run_agent(self, agent_name: str) -> AgentRunResult:
         """Run a single agent and return result."""

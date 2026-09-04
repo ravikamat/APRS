@@ -35,9 +35,12 @@ class RawProduct(BaseModel):
 
 
 class CanonicalProduct(BaseModel):
+    model_config = {"extra": "allow"}
     id: Optional[int] = None
+    product_id: Optional[str] = None
     canonical_title: str
     category: Optional[str] = None
+    region: Optional[str] = "India"
     retail_price_inr: float
     amazon_asin: Optional[str] = None
     flipkart_id: Optional[str] = None
@@ -53,6 +56,7 @@ class CanonicalProduct(BaseModel):
     current_gate: int = 1
     gate_status: str = 'PENDING'
     final_score: Optional[float] = None
+
 
 
 class ProductMatcher:

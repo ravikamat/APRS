@@ -113,6 +113,36 @@ class SupplierAgent:
         logger.info(f"Supplier batch complete: {results}")
         return results
 
+    async def _get_products_ready_for_sourcing(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get products that passed Gate 4 (Scoring) and are ready for supplier outreach.
+        These are products with status PROCEED or SOURCING_NEGOTIATION.
+        """
+        from core.database import get_connection
+        
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        # Get products that passed Gate 4 (Scoring gate) - gate 4 = SOURCING_QUOTE in old terms
+        # In new 5-gate: Gate 4 = Scoring, Gate 5 = NIM Arbiter
+        # Products ready for sourcing are those that passed Gate 4
+        cur.execute('''
+            SELECT p.* FROM master_products p
+            JOIN product_gate_progress g ON p.product_id = g.product_id
+            WHERE g.gate_number = 4 
+            AND g.status IN ('PASS', 'OVERRIDDEN')
+            AND p.is_deleted = 0
+            AND p.status NOT IN ('LIVE', 'SHIPPED')
+            ORDER BY p.overall_score DESC
+            LIMIT ?
+        ''', (limit,))
+        
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        
+        logger.info(f"Found {len(rows)} products ready for sourcing")
+        return rows
+
     async def process_product(self, product: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a single product: discover suppliers, verify them, create outreach drafts.
