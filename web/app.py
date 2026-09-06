@@ -68,7 +68,12 @@ st.markdown("""
 <style>
     .main { background: #F8FAFC; }
     .block-container { padding-top: 0.5rem !important; max-width: 100% !important; }
-    .metric-card { background:#FFFFFF; border-radius:10px; padding:14px 18px; border:1px solid #E2E8F0; margin-bottom:8px; }
+    
+    /* Cards & Containers */
+    .metric-card { background:#FFFFFF; border-radius:10px; padding:14px 18px; border:1px solid #E2E8F0; margin-bottom:8px; color:#1E293B; }
+    .metric-card h4, .metric-card strong, .metric-card small { color:#1E293B; }
+    
+    /* Gate Badges */
     .gate-badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:0.78rem; font-weight:700; margin:2px; }
     .badge-pass { background:#D1FAE5; color:#065F46; }
     .badge-fail { background:#FEE2E2; color:#991B1B; }
@@ -76,29 +81,105 @@ st.markdown("""
     .badge-blocked { background:#FEF3C7; color:#92400E; }
     .badge-progress { background:#DBEAFE; color:#1E40AF; }
     .badge-override { background:#EDE9FE; color:#6B21A8; }
+    
+    /* Score Display */
     .score-big { font-size:2.5rem; font-weight:800; text-align:center; }
     .score-proceed { color:#059669; }
     .score-marginal { color:#D97706; }
     .score-reject { color:#DC2626; }
+    
+    /* Tabs */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] { padding: 10px 24px; border-radius: 8px 8px 0 0; }
+    .stTabs [data-baseweb="tab"] { padding: 10px 24px; border-radius: 8px 8px 0 0; color:#1E293B !important; }
     .stTabs [aria-selected="true"] { background: #2563EB !important; color: white !important; }
+    
+    /* Status LEDs */
     .status-led { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
     .led-green { background:#22C55E; box-shadow:0 0 8px #22C55E; animation:pulse 2s infinite; }
     .led-yellow { background:#EAB308; box-shadow:0 0 8px #EAB308; animation:pulse 2s infinite; }
     .led-red { background:#EF4444; box-shadow:0 0 8px #EF4444; animation:pulse 2s infinite; }
     .led-gray { background:#94A3B8; }
     @keyframes pulse { 0% { opacity:1; } 50% { opacity:0.5; } 100% { opacity:1; } }
+    
+    /* Table Chips */
     .table-chip { background:#EFF6FF; color:#1E40AF; padding:4px 10px; border-radius:6px; font-size:0.8rem; font-weight:600; margin:2px; display:inline-block; }
-    .agent-row { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px; padding:12px; margin:6px 0; }
+    
+    /* Agent Rows */
+    .agent-row { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px; padding:12px; margin:6px 0; color:#1E293B; }
+    .agent-row strong, .agent-row small, .agent-row div { color:#1E293B; }
     .agent-running { border-left:4px solid #22C55E; }
     .agent-paused { border-left:4px solid #EAB308; }
+    
+    /* Kanban */
     .kanban-column { background:#F1F5F9; border-radius:8px; padding:10px; min-height:300px; }
-    .kanban-card { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:6px; padding:12px; margin:8px 0; box-shadow:0 1px 3px rgba(0,0,0,0.05); }
-    .review-cluster { background:#FFF7ED; border-left:4px solid #F97316; padding:12px; margin:8px 0; border-radius:0 8px 8px 0; }
-    .v2-spec { background:#F0FDF4; border-left:4px solid #22C55E; padding:12px; margin:8px 0; border-radius:0 8px 8px 0; }
+    .kanban-card { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:6px; padding:12px; margin:8px 0; box-shadow:0 1px 3px rgba(0,0,0,0.05); color:#1E293B; }
+    .kanban-card strong, .kanban-card small { color:#1E293B; }
+    
+    /* Review & Spec Clusters */
+    .review-cluster { background:#FFF7ED; border-left:4px solid #F97316; padding:12px; margin:8px 0; border-radius:0 8px 8px 0; color:#1E293B; }
+    .review-cluster strong, .review-cluster small { color:#1E293B; }
+    .v2-spec { background:#F0FDF4; border-left:4px solid #22C55E; padding:12px; margin:8px 0; border-radius:0 8px 8px 0; color:#1E293B; }
+    .v2-spec strong { color:#1E293B; }
+    
+    /* Sidebar */
     .sidebar-header { font-size:1.1rem; font-weight:700; color:#1E293B; margin-bottom:0.5rem; }
     .live-indicator { display:inline-flex; align-items:center; gap:6px; }
+    
+    /* Flow Graph Styles */
+    .flow-node { 
+        display:inline-flex; flex-direction:column; align-items:center; 
+        padding:12px 16px; border-radius:10px; 
+        min-width:140px; text-align:center;
+        box-shadow:0 2px 8px rgba(0,0,0,0.1);
+        transition:all 0.3s ease;
+        cursor:pointer;
+    }
+    .flow-node:hover { transform:translateY(-2px); box-shadow:0 4px 16px rgba(0,0,0,0.15); }
+    .flow-node.completed { background:#D1FAE5; border:2px solid #059669; }
+    .flow-node.running { background:#DBEAFE; border:2px solid #2563EB; animation:pulse 1.5s infinite; }
+    .flow-node.failed { background:#FEE2E2; border:2px solid #DC2626; }
+    .flow-node.blocked { background:#FEF3C7; border:2px solid #D97706; }
+    .flow-node.idle { background:#F1F5F9; border:2px solid #94A3B8; opacity:0.6; }
+    .flow-node-icon { font-size:1.8rem; margin-bottom:4px; }
+    .flow-node-name { font-weight:700; font-size:0.85rem; color:#1E293B; margin-bottom:2px; }
+    .flow-node-status { font-size:0.7rem; font-weight:600; text-transform:uppercase; padding:2px 8px; border-radius:6px; }
+    .flow-node-stats { font-size:0.65rem; color:#64748B; margin-top:4px; }
+    
+    .flow-arrow { font-size:1.5rem; color:#94A3B8; margin:0 8px; align-self:center; }
+    .flow-arrow.active { color:#2563EB; }
+    
+    .flow-layer { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:12px; padding:20px; margin:12px 0; }
+    .flow-layer-title { font-weight:700; color:#1E293B; margin-bottom:16px; padding-bottom:8px; border-bottom:2px solid #E2E8F0; }
+    
+    /* Branch Detail Panel */
+    .branch-detail { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px; padding:16px; margin-top:16px; }
+    .branch-detail h4 { color:#1E293B; margin-top:0; }
+    .branch-detail .data-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #F1F5F9; }
+    .branch-detail .data-row:last-child { border-bottom:none; }
+    .branch-detail .data-label { color:#64748B; font-weight:500; }
+    .branch-detail .data-value { color:#1E293B; font-weight:600; }
+    
+    /* Top Header Improvements */
+    .top-header { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:12px; padding:16px 20px; margin-bottom:16px; }
+    .header-section { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+    .daemon-controls { display:flex; gap:8px; }
+    .daemon-btn { padding:8px 16px; border-radius:8px; font-weight:600; border:none; cursor:pointer; transition:all 0.2s; }
+    .daemon-btn.primary { background:#2563EB; color:white; }
+    .daemon-btn.primary:hover { background:#1D4ED8; }
+    .daemon-btn.secondary { background:#F1F5F9; color:#1E293B; border:1px solid #E2E8F0; }
+    .daemon-btn.secondary:hover { background:#E2E8F0; }
+    .daemon-btn.danger { background:#FEE2E2; color:#DC2626; border:1px solid #FECACA; }
+    .daemon-btn.danger:hover { background:#FECACA; }
+    
+    /* Search Expandable */
+    .search-expand { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px; padding:12px; margin:8px 0; }
+    .search-expand-header { display:flex; align-items:center; justify-content:space-between; cursor:pointer; }
+    .search-expand-content { margin-top:12px; padding-top:12px; border-top:1px solid #E2E8F0; }
+    
+    /* Stats Summary */
+    .stat-card { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px; padding:16px; text-align:center; }
+    .stat-value { font-size:1.5rem; font-weight:800; color:#1E293B; }
+    .stat-label { font-size:0.75rem; color:#64748B; text-transform:uppercase; letter-spacing:0.05em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -298,14 +379,15 @@ groq_led = "🟢"  # Would check Groq
 ollama_led = "🟡"  # Would check Ollama
 daemon_led = "🟢" if status["running"] else ("🟡" if status["is_paused"] else "🔴")
 
-hdr_col1, hdr_col2, hdr_col3 = st.columns([3, 2, 2])
+# Header Row 1: Status & Daemon Controls
+hdr_col1, hdr_col2, hdr_col3 = st.columns([3, 2.5, 2.5])
 with hdr_col1:
     st.markdown(f"""
     <div class="live-indicator">
         <span class="status-led led-{'green' if nim_led=='🟢' else 'gray'}"></span>NIM 550B
         <span class="status-led led-{'green' if groq_led=='🟢' else 'gray'}"></span>Groq
         <span class="status-led led-{'yellow' if ollama_led=='🟡' else 'green' if ollama_led=='🟢' else 'gray'}"></span>Ollama
-        <span class="status-led led-{'green' if daemon_led=='🟢' else 'yellow' if daemon_led=='🟡' else 'red'}"></span>{'24/7 Daemon ACTIVE' if status['running'] else 'Daemon PAUSED' if status['is_paused'] else 'Daemon STOPPED'}
+        <span class="status-led led-{'green' if daemon_led=='🟢' else 'yellow' if daemon_led=='🟡' else 'red'}"></span><strong>{'24/7 Daemon ACTIVE' if status['running'] else 'Daemon PAUSED' if status['is_paused'] else 'Daemon STOPPED'}</strong>
     </div>
     """, unsafe_allow_html=True)
 
@@ -321,38 +403,134 @@ with hdr_col2:
     st.markdown(chips_html, unsafe_allow_html=True)
 
 with hdr_col3:
-    # Daemon controls
-    d1, d2, d3, d4 = st.columns(4)
+    # Daemon controls - cleaner layout
     if not status["running"]:
-        if d1.button("▶️ Start", type="primary", use_container_width=True, key="daemon_start"):
+        if st.button("▶️ Start Daemon", type="primary", use_container_width=True, key="daemon_start"):
             daemon_controller.start()
             st.rerun()
     else:
+        c1, c2, c3 = st.columns(3)
         if status["is_paused"]:
-            if d1.button("▶ Resume", use_container_width=True, key="daemon_resume"):
+            if c1.button("▶ Resume", use_container_width=True, key="daemon_resume"):
                 daemon_controller.resume()
                 st.rerun()
         else:
-            if d1.button("⏸ Pause", use_container_width=True, key="daemon_pause"):
+            if c1.button("⏸ Pause", use_container_width=True, key="daemon_pause"):
                 daemon_controller.pause()
                 st.rerun()
-        if d2.button("🔄 Force Cycle", use_container_width=True, key="daemon_cycle"):
+        if c2.button("🔄 Force Cycle", use_container_width=True, key="daemon_cycle"):
             daemon_controller.trigger_cycle_now()
             st.toast("Cycle triggered!")
-    with d3:
-        with st.popover("📜 Live Log"):
-            logs = daemon_controller.stream_log_tail(50)
-            for log in reversed(logs):
-                st.text(log)
-            if st.button("Clear Log", key="clear_log"):
-                daemon_controller.recent_logs.clear()
-                st.rerun()
+        with c3:
+            with st.popover("📜 Live Log"):
+                logs = daemon_controller.stream_log_tail(50)
+                for log in reversed(logs):
+                    st.text(log)
+                if st.button("Clear Log", key="clear_log"):
+                    daemon_controller.recent_logs.clear()
+                    st.rerun()
+
+# Header Row 2: Manual Product Search & Quick Stats
+st.markdown('<div class="top-header">', unsafe_allow_html=True)
+
+# Initialize search expand state
+if "search_expanded" not in st.session_state:
+    st.session_state["search_expanded"] = False
+
+# Search expandable button
+search_col1, search_col2, search_col3 = st.columns([2, 4, 2])
+with search_col1:
+    if st.button(
+        "🔍 Product Search" + (" ▼" if st.session_state["search_expanded"] else " ▶"),
+        use_container_width=True,
+        key="search_toggle"
+    ):
+        st.session_state["search_expanded"] = not st.session_state["search_expanded"]
+        st.rerun()
+
+with search_col2:
+    if st.session_state["search_expanded"]:
+        # Inline search form
+        s1, s2, s3, s4 = st.columns([3, 2, 2, 1])
+        with s1:
+            search_query = st.text_input(
+                "Search products...",
+                placeholder="Enter product name, ID, category, or ASIN",
+                key="product_search_input",
+                label_visibility="collapsed"
+            )
+        with s2:
+            search_region = st.selectbox(
+                "Region",
+                ["All"] + sorted({p["region"] for p in products if p.get("region")}),
+                key="search_region",
+                label_visibility="collapsed"
+            )
+        with s3:
+            search_category = st.selectbox(
+                "Category",
+                ["All"] + sorted({p["category"] for p in products if p.get("category")}),
+                key="search_category",
+                label_visibility="collapsed"
+            )
+        with s4:
+            search_btn = st.button("🔍 Search", type="primary", use_container_width=True, key="product_search_btn")
+        
+        # Execute search
+        if search_btn or (search_query and len(search_query) >= 2):
+            search_results = products
+            if search_query:
+                sq = search_query.lower()
+                search_results = [p for p in search_results if 
+                    sq in p.get("name", "").lower() or
+                    sq in p.get("product_id", "").lower() or
+                    sq in p.get("category", "").lower() or
+                    sq in p.get("amazon_asin", "").lower()
+                ]
+            if search_region != "All":
+                search_results = [p for p in search_results if p.get("region") == search_region]
+            if search_category != "All":
+                search_results = [p for p in search_results if p.get("category") == search_category]
+            
+            if search_results:
+                st.success(f"Found {len(search_results)} matching products")
+                # Show top 10 results inline
+                for p in search_results[:10]:
+                    sc1, sc2, sc3, sc4 = st.columns([3, 1, 1, 1])
+                    with sc1:
+                        st.markdown(f"**{p['name'][:55]}**  \n<small>{p.get('category','')} | {p.get('region','')} | {format_inr(p.get('planned_msrp',0))}</small>", unsafe_allow_html=True)
+                    with sc2:
+                        st.caption(f"Score: {p.get('overall_score',0):.0f}")
+                    with sc3:
+                        st.caption(f"Status: {p.get('status','PENDING')}")
+                    with sc4:
+                        if st.button("View", key=f"search_view_{p['product_id']}", use_container_width=True):
+                            st.session_state["search_expanded"] = False
+                            st.session_state["view_product_id"] = p["product_id"]
+                            st.session_state["active_tab"] = "opportunities"
+                            st.rerun()
+            else:
+                st.warning("No products found matching your criteria")
+
+with search_col3:
+    # Quick action buttons
+    qc1, qc2 = st.columns(2)
+    with qc1:
+        if st.button("📋 View All", use_container_width=True, key="search_view_all"):
+            st.session_state["search_expanded"] = False
+            st.rerun()
+    with qc2:
+        if st.button("➕ Add Manual", use_container_width=True, key="search_add_manual"):
+            st.toast("Manual product entry - use CLI for now")
+            st.rerun()
+
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.divider()
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # TAB DEFINITIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 TABS = [
     ("opportunities", "📋 Opportunities"),
     ("agent_cockpit", "⚡ Agent Command"),
@@ -364,9 +542,10 @@ TABS = [
     ("economics", "📊 Economics"),
     ("db_explorer", "🗄️ DB Explorer"),
     ("archive", "🗃️ Archive"),
+    ("flow_graph", "🔄 Flow Graph"),
 ]
 
-tab_opp, tab_agent, tab_sup, tab_rev, tab_lp, tab_wr, tab_kp, tab_eco, tab_db, tab_arch = st.tabs([t[1] for t in TABS])
+tab_opp, tab_agent, tab_sup, tab_rev, tab_lp, tab_wr, tab_kp, tab_eco, tab_db, tab_arch, tab_flow = st.tabs([t[1] for t in TABS])
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 1: OPPORTUNITIES & GATE PIPELINE
@@ -1279,6 +1458,356 @@ with tab_arch:
                             conn.close()
                             st.toast("Permanently deleted!")
                             st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 11: FLOW GRAPH — Agent Pipeline Visualization
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_flow:
+    st.subheader("🔄 Agent Pipeline Flow Graph")
+    st.caption("Real-time visualization of the autonomous research pipeline. Click any node to see detailed metrics and collected data.")
+    
+    # Get current status
+    status = daemon_controller.get_status()
+    agent_states = status.get("agent_states", {})
+    agent_telemetry = status.get("agent_telemetry", {})
+    
+    # Define pipeline layers (matching AGENT_ORDER in orchestrator)
+    PIPELINE_LAYERS = [
+        {
+            "name": "📅 Planning & Strategy",
+            "agents": [
+                {"key": "strategy_planner", "icon": "📅", "name": "Strategy Planner", "desc": "Weekly strategic research planning"},
+                {"key": "ai_scout", "icon": "🤖", "name": "AI Scout", "desc": "Autonomous website/platform discovery (10x)"},
+            ]
+        },
+        {
+            "name": "🌐 Discovery & Signals",
+            "agents": [
+                {"key": "internet_crawler", "icon": "🌐", "name": "Internet Crawler", "desc": "Scans 50+ sources for trends"},
+                {"key": "trend_signal", "icon": "📈", "name": "Trend Signal", "desc": "Aggregates Google Trends, Reddit, YouTube"},
+                {"key": "demand_sense", "icon": "📊", "name": "Demand Sense", "desc": "Computes real demand proxies"},
+                {"key": "competition_xray", "icon": "🔍", "name": "Competition X-Ray", "desc": "Deep competitive analysis"},
+                {"key": "niche_expander", "icon": "🔎", "name": "Niche Expander", "desc": "Expands categories to niches"},
+            ]
+        },
+        {
+            "name": "🛒 Product Discovery",
+            "agents": [
+                {"key": "discovery", "icon": "🛒", "name": "Discovery", "desc": "Multi-marketplace scraping"},
+                {"key": "problem_miner", "icon": "⛏️", "name": "Problem Miner", "desc": "3-star review defect mining"},
+            ]
+        },
+        {
+            "name": "🚪 Gate Pipeline",
+            "agents": [
+                {"key": "gate_engine", "icon": "🚪", "name": "Gate Engine", "desc": "5-gate deterministic pipeline"},
+                {"key": "supplier_agent", "icon": "🏭", "name": "Supplier Agent", "desc": "IndiaMART/Alibaba + GST verify"},
+            ]
+        },
+        {
+            "name": "📧 Outreach & Learning",
+            "agents": [
+                {"key": "outreach_engine", "icon": "📧", "name": "Outreach Engine", "desc": "Email/WhatsApp drafts (NIM)"},
+                {"key": "winner_score", "icon": "🏆", "name": "Winner Score", "desc": "Nightly leaderboard computation"},
+                {"key": "maintenance", "icon": "🔧", "name": "Maintenance", "desc": "TTL cleanup, VACUUM, backup"},
+                {"key": "weight_tuner", "icon": "⚖️", "name": "Weight Tuner", "desc": "Quarterly weight optimization"},
+                {"key": "learning_agent", "icon": "🧠", "name": "Learning Agent", "desc": "Weekly rule synthesis"},
+            ]
+        },
+    ]
+    
+    # Status color mapping
+    STATUS_CONFIG = {
+        "COMPLETED": {"class": "completed", "label": "✅ COMPLETED", "color": "#059669"},
+        "RUNNING": {"class": "running", "label": "🔄 RUNNING", "color": "#2563EB"},
+        "FAILED": {"class": "failed", "label": "❌ FAILED", "color": "#DC2626"},
+        "BLOCKED": {"class": "blocked", "label": "⚠️ BLOCKED", "color": "#D97706"},
+        "IDLE": {"class": "idle", "label": "⏸ IDLE", "color": "#94A3B8"},
+        "PAUSED": {"class": "idle", "label": "⏸ PAUSED", "color": "#94A3B8"},
+    }
+    
+    # Initialize selected node in session state
+    if "selected_flow_node" not in st.session_state:
+        st.session_state["selected_flow_node"] = None
+    
+    # Render pipeline layers
+    for layer_idx, layer in enumerate(PIPELINE_LAYERS):
+        st.markdown(f'<div class="flow-layer">', unsafe_allow_html=True)
+        st.markdown(f'<div class="flow-layer-title">{layer["name"]}</div>', unsafe_allow_html=True)
+        
+        # Create columns for agents in this layer
+        cols = st.columns(len(layer["agents"]))
+        
+        for agent_idx, agent in enumerate(layer["agents"]):
+            with cols[agent_idx]:
+                state = agent_states.get(agent["key"], "IDLE")
+                telemetry = agent_telemetry.get(agent["key"], {})
+                config = STATUS_CONFIG.get(state, STATUS_CONFIG["IDLE"])
+                
+                # Node click handler
+                if st.button(
+                    f"{agent['icon']} {agent['name']}",
+                    key=f"flow_{agent['key']}",
+                    use_container_width=True,
+                    help=f"{agent['desc']}\nStatus: {state}\nRuns: {telemetry.get('runs', 0)}\nCreated: {telemetry.get('items_created', 0)}"
+                ):
+                    st.session_state["selected_flow_node"] = agent["key"]
+                    st.rerun()
+                
+                # Render node with status styling
+                st.markdown(f"""
+                <div class="flow-node {config['class']}">
+                    <div class="flow-node-icon">{agent['icon']}</div>
+                    <div class="flow-node-name">{agent['name']}</div>
+                    <div class="flow-node-status" style="background:{config['color']}20; color:{config['color']}; border:1px solid {config['color']};">
+                        {config['label']}
+                    </div>
+                    <div class="flow-node-stats">
+                        Runs: {telemetry.get('runs', 0)} | 
+                        ✅ {telemetry.get('successes', 0)} | 
+                        📦 {telemetry.get('items_created', 0)}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add arrow between layers (except last)
+        if layer_idx < len(PIPELINE_LAYERS) - 1:
+            st.markdown('<div style="text-align:center;"><span class="flow-arrow">⬇</span></div>', unsafe_allow_html=True)
+    
+    # Branch Detail Panel
+    if st.session_state["selected_flow_node"]:
+        selected_key = st.session_state["selected_flow_node"]
+        
+        # Find agent info
+        selected_agent = None
+        for layer in PIPELINE_LAYERS:
+            for agent in layer["agents"]:
+                if agent["key"] == selected_key:
+                    selected_agent = agent
+                    break
+            if selected_agent:
+                break
+        
+        if selected_agent:
+            state = agent_states.get(selected_key, "IDLE")
+            telemetry = agent_telemetry.get(selected_key, {})
+            config = STATUS_CONFIG.get(state, STATUS_CONFIG["IDLE"])
+            
+            st.markdown("---")
+            st.markdown(f"""
+            <div class="branch-detail">
+                <h4>{selected_agent['icon']} {selected_agent['name']} — Branch Details</h4>
+                <div class="data-row">
+                    <span class="data-label">Status</span>
+                    <span class="data-value" style="color:{config['color']};">{config['label']}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Description</span>
+                    <span class="data-value">{selected_agent['desc']}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Total Runs</span>
+                    <span class="data-value">{telemetry.get('runs', 0)}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Successful Runs</span>
+                    <span class="data-value" style="color:#059669;">{telemetry.get('successes', 0)}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Failed Runs</span>
+                    <span class="data-value" style="color:#DC2626;">{telemetry.get('failures', 0)}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Items Processed</span>
+                    <span class="data-value">{telemetry.get('items_processed', 0):,}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Items Created</span>
+                    <span class="data-value" style="color:#059669;">{telemetry.get('items_created', 0):,}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Last Run</span>
+                    <span class="data-value">{telemetry.get('last_run', 'Never')}</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Last Duration</span>
+                    <span class="data-value">{telemetry.get('last_duration_ms', 0)} ms</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Last Error</span>
+                    <span class="data-value" style="color:#DC2626;">{telemetry.get('last_error', 'None')}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Show collected data based on agent type
+            st.markdown("### 📊 Collected Data")
+            
+            if selected_key == "trend_signal":
+                # Show trend signals
+                from core.database import get_connection
+                conn = get_connection()
+                cur = conn.execute("""
+                    SELECT platform, keyword, trend_category, region, search_volume_est, velocity_score, status, created_at
+                    FROM trend_signals 
+                    WHERE status = 'ACTIVE'
+                    ORDER BY velocity_score DESC, created_at DESC LIMIT 20
+                """)
+                trends = [dict(r) for r in cur.fetchall()]
+                conn.close()
+                if trends:
+                    st.dataframe(pd.DataFrame(trends), width='stretch', hide_index=True)
+                else:
+                    st.info("No trend signals collected yet.")
+                    
+            elif selected_key == "discovery":
+                # Show discovered products
+                products = load_products(include_deleted=False)
+                if products:
+                    df = pd.DataFrame([{
+                        "Product": p["name"][:50],
+                        "Category": p.get("category", ""),
+                        "Region": p.get("region", ""),
+                        "MSRP": format_inr(p.get("planned_msrp", 0)),
+                        "Score": f"{p.get('overall_score', 0):.0f}",
+                        "Status": p.get("status", "PENDING"),
+                    } for p in products[:50]])
+                    st.dataframe(df, width='stretch', hide_index=True)
+                else:
+                    st.info("No products discovered yet.")
+                    
+            elif selected_key == "gate_engine":
+                # Show gate progress
+                from core.database import get_gate_status
+                products = load_products(include_deleted=False)
+                gate_data = []
+                for p in products[:30]:
+                    gates = get_gate_status(p["product_id"])
+                    gate_str = " → ".join([f"G{g['gate_number']}:{g.get('status','?')}" for g in gates])
+                    gate_data.append({
+                        "Product": p["name"][:40],
+                        "ID": p["product_id"],
+                        "Gates": gate_str,
+                        "Score": f"{p.get('overall_score', 0):.0f}",
+                    })
+                if gate_data:
+                    st.dataframe(pd.DataFrame(gate_data), width='stretch', hide_index=True)
+                else:
+                    st.info("No products in gate pipeline.")
+                    
+            elif selected_key == "problem_miner":
+                # Show defect clusters
+                from core.database import get_defect_clusters
+                products = load_products(include_deleted=False)
+                all_defects = []
+                for p in products[:20]:
+                    defects = get_defect_clusters(p["product_id"])
+                    for d in defects:
+                        all_defects.append({
+                            "Product": p["name"][:35],
+                            "Defect": d.get("defect_description", "")[:60],
+                            "Severity": d.get("severity", "N/A"),
+                            "Fixable": "✅" if d.get("is_fixable") else "❌",
+                            "v2 Fix": d.get("v2_fix_description", "")[:50] if d.get("v2_fix_description") else "—",
+                        })
+                if all_defects:
+                    st.dataframe(pd.DataFrame(all_defects), width='stretch', hide_index=True)
+                else:
+                    st.info("No defects mined yet.")
+                    
+            elif selected_key == "supplier_agent":
+                # Show suppliers
+                from core.database import get_supplier_profiles_for_product
+                products = load_products(include_deleted=False)
+                all_suppliers = []
+                for p in products[:15]:
+                    suppliers = get_supplier_profiles_for_product(p["product_id"])
+                    for s in suppliers:
+                        all_suppliers.append({
+                            "Product": p["name"][:30],
+                            "Supplier": s.get("company_name", "Unknown")[:30],
+                            "Platform": s.get("platform", "N/A"),
+                            "MOQ": s.get("moq_units", "N/A"),
+                            "Price": s.get("fob_unit_price", "N/A"),
+                            "GST": "✅" if s.get("gst_verified") else "❌",
+                            "Score": f"{s.get('verification_score', 0):.0f}/100",
+                        })
+                if all_suppliers:
+                    st.dataframe(pd.DataFrame(all_suppliers), width='stretch', hide_index=True)
+                else:
+                    st.info("No suppliers found yet.")
+                    
+            elif selected_key == "outreach_engine":
+                # Show outreach drafts
+                from core.database import get_connection
+                conn = get_connection()
+                cur = conn.execute("""
+                    SELECT od.draft_id, od.subject, od.status, od.channel, od.created_at, mp.company_name
+                    FROM outreach_drafts od
+                    JOIN supplier_profiles mp ON od.supplier_id = mp.supplier_id
+                    ORDER BY od.created_at DESC LIMIT 20
+                """)
+                drafts = [dict(r) for r in cur.fetchall()]
+                conn.close()
+                if drafts:
+                    st.dataframe(pd.DataFrame(drafts), width='stretch', hide_index=True)
+                else:
+                    st.info("No outreach drafts yet.")
+                    
+            elif selected_key == "learning_agent":
+                # Show learned rules
+                from core.database import get_learned_rules
+                rules = get_learned_rules(enabled_only=True)
+                if rules:
+                    df = pd.DataFrame([{
+                        "Rule ID": r.get("rule_id_str", "")[:20],
+                        "Name": r.get("name", "")[:40],
+                        "Severity": r.get("severity", 1),
+                        "Action": r.get("action", "")[:40],
+                        "Enabled": "✅" if r.get("enabled") else "❌",
+                    } for r in rules[:30]])
+                    st.dataframe(df, width='stretch', hide_index=True)
+                else:
+                    st.info("No learned rules yet.")
+                    
+            elif selected_key in ["internet_crawler", "niche_expander", "demand_sense", "competition_xray", "ai_scout"]:
+                # Show dynamic niches or discovered sources
+                from core.database import get_dynamic_niches, get_discovered_sources
+                if selected_key in ["internet_crawler", "niche_expander", "demand_sense", "competition_xray"]:
+                    niches = get_dynamic_niches(active_only=True)
+                    if niches:
+                        df = pd.DataFrame([{
+                            "Category": n.get("category", ""),
+                            "Region": n.get("region", ""),
+                            "Priority": f"{n.get('priority_score', 0):.0f}",
+                            "Scanned": n.get("times_scanned", 0),
+                            "Products Found": n.get("products_found", 0),
+                            "Last Scan": n.get("last_scanned_at", "Never")[:16] if n.get("last_scanned_at") else "Never",
+                        } for n in niches])
+                        st.dataframe(df, width='stretch', hide_index=True)
+                    else:
+                        st.info("No dynamic niches yet.")
+                if selected_key == "ai_scout":
+                    sources = get_discovered_sources(active_only=True)
+                    if sources:
+                        df = pd.DataFrame([{
+                            "Source": s.get("source_name", s.get("domain", ""))[:40],
+                            "Type": s.get("source_type", ""),
+                            "Region": s.get("region", ""),
+                            "Reliability": f"{s.get('reliability_score', 0):.0f}%",
+                            "Times Used": s.get("times_used", 0),
+                            "Yielded": s.get("times_yielded_results", 0),
+                        } for s in sources[:30]])
+                        st.dataframe(df, width='stretch', hide_index=True)
+                    else:
+                        st.info("No discovered sources yet.")
+            
+            # Close detail button
+            if st.button("✖ Close Details", key="close_flow_detail", use_container_width=True):
+                st.session_state["selected_flow_node"] = None
+                st.rerun()
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
