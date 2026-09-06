@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -45,7 +45,7 @@ class DatabaseBackup:
             logger.error(f"Database not found: {self.db_path}")
             return None
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_name = f"{self.db_path.stem}_{timestamp}"
         if suffix:
             backup_name += f"_{suffix}"
@@ -118,6 +118,26 @@ class DatabaseBackup:
             })
         return backups
     
+    def vacuum_database(self) -> bool:
+        """
+        Run VACUUM on the database to reclaim space and defragment.
+        
+        Returns True on success, False on failure.
+        """
+        if not self.db_path.exists():
+            logger.error(f"Database not found: {self.db_path}")
+            return False
+        
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.execute("VACUUM")
+            conn.close()
+            logger.info(f"VACUUM completed on {self.db_path}")
+            return True
+        except Exception as e:
+            logger.error(f"VACUUM failed: {e}")
+            return False
+
     def restore_backup(self, backup_name: str, target_path: Path = None) -> bool:
         """Restore database from a backup file."""
         target = target_path or self.db_path
@@ -188,9 +208,9 @@ def main():
     if args.backup:
         result = backup.create_backup()
         if result:
-            print(f"✅ Backup created: {result}")
+            print(f"[OK] Backup created: {result}")
         else:
-            print("❌ Backup failed")
+            print("[FAIL] Backup failed")
             sys.exit(1)
     
     elif args.list:
@@ -203,9 +223,9 @@ def main():
     
     elif args.restore:
         if backup.restore_backup(args.restore):
-            print(f"✅ Restored from {args.restore}")
+            print(f"[OK] Restored from {args.restore}")
         else:
-            print("❌ Restore failed")
+            print("[FAIL] Restore failed")
             sys.exit(1)
     
     else:

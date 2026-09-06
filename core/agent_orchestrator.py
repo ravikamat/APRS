@@ -8,7 +8,7 @@ and coordinates the autonomous pipeline. No LLM calls — purely deterministic.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Awaitable
@@ -27,6 +27,7 @@ from core.database import (
     record_dynamic_niche, record_seed_keyword,
     get_active_trend_signals, get_supplier_profiles_for_product,
     get_launchpad_items, add_to_launchpad,
+    _db_write_lock,
 )
 from core.validation import RawProduct, CanonicalProduct, ProductMatcher, ValidationPipeline
 from core.gate_engine import GateEngine, PipelineResult
@@ -36,10 +37,14 @@ from core.pipeline import V6Pipeline, PipelineConfig, run_full_pipeline
 from core.llm_router import LLMRouter, LLMTaskType
 from core.nim_client import get_nim_client
 from core.rule_engine import create_rule_engine
+from core.contracts import REGISTRY, verify_agent_output, record_agent_health, run_with_contract
 from tools.discovery_engine import DiscoveryEngine
 from tools.trend_scout.trend_aggregator import OpenWebTrendScout
 from tools.web_agent import WebAgent
 from core.outreach_engine import OutreachEngine, create_initial_outreach
+from core.maintenance import MaintenanceManager
+from core.winner_score import WinnerScoreComputer
+from agents.ai_scout import AIScoutAgent, run_ai_scout
 
 logger = logging.getLogger("aprs.orchestrator")
 
@@ -102,15 +107,22 @@ class AgentOrchestrator:
     
     # Agent execution order (respecting dependencies)
     AGENT_ORDER = [
-        "internet_crawler",
-        "trend_signal", 
-        "niche_expander",
-        "discovery",
-        "problem_miner",
-        "gate_engine",
-        "supplier_agent",
-        "outreach_engine",
-        "learning_agent",
+        "strategy_planner",      # Weekly: decides WHERE to hunt
+        "ai_scout",              # Weekly: discovers new sources, marketplaces, communities
+        "internet_crawler",      # Continuous: discovers new sources
+        "trend_signal",          # Continuous: aggregates trend signals
+        "demand_sense",          # Daily: computes real demand proxies
+        "competition_xray",      # Daily: competitive analysis per category
+        "niche_expander",        # Daily: expands niches from directives
+        "discovery",             # 12h: scrapes marketplaces for products
+        "problem_miner",         # Daily: mines defects from reviews
+        "gate_engine",           # Daily: runs 5-gate validation
+        "supplier_agent",        # Daily: finds/verifies suppliers
+        "outreach_engine",       # 12h: sends approved outreach
+        "winner_score",          # Daily: computes leaderboard rankings
+        "maintenance",           # Daily: TTL cleanup, VACUUM, backup
+        "weight_tuner",          # Quarterly: optimizes winner score weights
+        "learning_agent",        # Weekly: learns from outcomes
     ]
     
     def __init__(
@@ -141,12 +153,20 @@ class AgentOrchestrator:
     def _default_configs(self) -> Dict[str, AgentConfig]:
         """Default agent configurations."""
         return {
+            "strategy_planner": AgentConfig(
+                name="strategy_planner",
+                enabled=True,
+                interval_seconds=604800,  # Weekly
+                max_concurrent=1,
+                timeout_seconds=600,
+            ),
             "internet_crawler": AgentConfig(
                 name="internet_crawler",
                 enabled=True,
                 interval_seconds=7200,  # Every 2 hours
                 max_concurrent=2,
                 timeout_seconds=600,
+                dependencies=["strategy_planner"],
             ),
             "trend_signal": AgentConfig(
                 name="trend_signal",
@@ -156,13 +176,29 @@ class AgentOrchestrator:
                 timeout_seconds=300,
                 dependencies=["internet_crawler"],
             ),
+            "demand_sense": AgentConfig(
+                name="demand_sense",
+                enabled=True,
+                interval_seconds=86400,  # Daily
+                max_concurrent=1,
+                timeout_seconds=300,
+                dependencies=["trend_signal"],
+            ),
+            "competition_xray": AgentConfig(
+                name="competition_xray",
+                enabled=True,
+                interval_seconds=86400,  # Daily
+                max_concurrent=1,
+                timeout_seconds=300,
+                dependencies=["demand_sense"],
+            ),
             "niche_expander": AgentConfig(
                 name="niche_expander",
                 enabled=True,
                 interval_seconds=86400,  # Daily
                 max_concurrent=1,
                 timeout_seconds=120,
-                dependencies=["trend_signal"],
+                dependencies=["competition_xray"],
             ),
             "discovery": AgentConfig(
                 name="discovery",
@@ -204,13 +240,45 @@ class AgentOrchestrator:
                 timeout_seconds=180,
                 dependencies=["supplier_agent"],
             ),
+            "winner_score": AgentConfig(
+                name="winner_score",
+                enabled=True,
+                interval_seconds=86400,  # Daily
+                max_concurrent=1,
+                timeout_seconds=180,
+                dependencies=["outreach_engine"],
+            ),
+            "maintenance": AgentConfig(
+                name="maintenance",
+                enabled=True,
+                interval_seconds=86400,  # Daily
+                max_concurrent=1,
+                timeout_seconds=600,
+                dependencies=["winner_score"],
+            ),
+            "weight_tuner": AgentConfig(
+                name="weight_tuner",
+                enabled=True,
+                interval_seconds=2592000,  # Quarterly (30 days)
+                max_concurrent=1,
+                timeout_seconds=600,
+                dependencies=["maintenance"],
+            ),
             "learning_agent": AgentConfig(
                 name="learning_agent",
                 enabled=True,
                 interval_seconds=604800,  # Weekly
                 max_concurrent=1,
                 timeout_seconds=600,
-                dependencies=["outreach_engine"],
+                dependencies=["weight_tuner"],
+            ),
+            "ai_scout": AgentConfig(
+                name="ai_scout",
+                enabled=True,
+                interval_seconds=86400,  # Daily (24 hours)
+                max_concurrent=1,
+                timeout_seconds=3600,  # 60 min for 10x discovery
+                dependencies=["strategy_planner"],
             ),
         }
     
@@ -277,7 +345,7 @@ class AgentOrchestrator:
             return AgentRunResult(
                 agent_name=agent_name,
                 state=AgentState.BLOCKED,
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
                 error=f"Agent not configured or disabled",
             )
         
@@ -288,71 +356,113 @@ class AgentOrchestrator:
                 return AgentRunResult(
                     agent_name=agent_name,
                     state=AgentState.BLOCKED,
-                    started_at=datetime.utcnow(),
+                    started_at=datetime.now(timezone.utc),
                     error=f"Dependency '{dep}' not ready (state: {self._agent_states.get(dep)})",
                 )
         
-        started_at = datetime.utcnow()
+        started_at = datetime.now(timezone.utc)
         self._agent_states[agent_name] = AgentState.RUNNING
         logger.info(f"Starting agent: {agent_name}")
         
-        try:
-            # Run with timeout
-            result = await asyncio.wait_for(
-                self._execute_agent(agent_name),
-                timeout=config.timeout_seconds,
-            )
-            
-            completed_at = datetime.utcnow()
-            duration_ms = int((completed_at - started_at).total_seconds() * 1000)
-            
-            result = AgentRunResult(
-                agent_name=agent_name,
-                state=AgentState.COMPLETED,
-                started_at=started_at,
-                completed_at=completed_at,
-                duration_ms=duration_ms,
-                **result,
-            )
-            
-            self._agent_states[agent_name] = AgentState.COMPLETED
-            logger.info(f"Agent {agent_name} completed in {duration_ms}ms")
-            return result
-            
-        except asyncio.TimeoutError:
-            completed_at = datetime.utcnow()
-            duration_ms = int((completed_at - started_at).total_seconds() * 1000)
-            self._agent_states[agent_name] = AgentState.FAILED
-            logger.error(f"Agent {agent_name} timed out after {config.timeout_seconds}s")
-            return AgentRunResult(
-                agent_name=agent_name,
-                state=AgentState.FAILED,
-                started_at=started_at,
-                completed_at=completed_at,
-                duration_ms=duration_ms,
-                error=f"Timeout after {config.timeout_seconds}s",
-            )
-        except Exception as e:
-            completed_at = datetime.utcnow()
-            duration_ms = int((completed_at - started_at).total_seconds() * 1000)
-            self._agent_states[agent_name] = AgentState.FAILED
-            logger.error(f"Agent {agent_name} failed: {e}")
-            return AgentRunResult(
-                agent_name=agent_name,
-                state=AgentState.FAILED,
-                started_at=started_at,
-                completed_at=completed_at,
-                duration_ms=duration_ms,
-                error=str(e),
-            )
+        # Generate cycle ID for contract tracking
+        import uuid
+        cycle_id = f"{agent_name}_{started_at.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        
+        # Retry configuration for database locked errors
+        max_retries = 3
+        base_delay = 0.5  # seconds
+        
+        for attempt in range(max_retries + 1):
+            # Acquire database write lock for the entire agent run to prevent locking issues
+            import threading
+            db_lock_acquired = False
+            try:
+                # Acquire database write lock for the entire agent run
+                _db_write_lock.acquire()
+                db_lock_acquired = True
+                
+                # Run with timeout AND contract enforcement
+                async def _wrapped_execute():
+                    return await run_with_contract(agent_name, self._execute_agent, cycle_id, cycle_id)
+                
+                result = await asyncio.wait_for(
+                    _wrapped_execute(),
+                    timeout=config.timeout_seconds,
+                )
+                
+                completed_at = datetime.now(timezone.utc)
+                duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+                
+                result = AgentRunResult(
+                    agent_name=agent_name,
+                    state=AgentState.COMPLETED,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_ms=duration_ms,
+                    **result,
+                )
+                
+                self._agent_states[agent_name] = AgentState.COMPLETED
+                logger.info(f"Agent {agent_name} completed in {duration_ms}ms (contract verified)")
+                return result
+                
+            except asyncio.TimeoutError:
+                completed_at = datetime.now(timezone.utc)
+                duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+                self._agent_states[agent_name] = AgentState.FAILED
+                logger.error(f"Agent {agent_name} timed out after {config.timeout_seconds}s")
+                return AgentRunResult(
+                    agent_name=agent_name,
+                    state=AgentState.FAILED,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_ms=duration_ms,
+                    error=f"Timeout after {config.timeout_seconds}s",
+                )
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a database locked error and we should retry
+                if "database is locked" in error_str.lower() and attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Agent {agent_name} database locked, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(delay)
+                    continue
+                # Re-raise for other errors or if max retries exceeded
+                raise
+            finally:
+                # Release database write lock
+                if db_lock_acquired:
+                    _db_write_lock.release()
+        
+        # If we exhausted retries for database locked
+        completed_at = datetime.now(timezone.utc)
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+        self._agent_states[agent_name] = AgentState.FAILED
+        logger.error(f"Agent {agent_name} failed after {max_retries} retries: database locked")
+        return AgentRunResult(
+            agent_name=agent_name,
+            state=AgentState.FAILED,
+            started_at=started_at,
+            completed_at=completed_at,
+            duration_ms=duration_ms,
+            error=f"Database locked after {max_retries} retries",
+        )
     
-    async def _execute_agent(self, agent_name: str) -> Dict[str, Any]:
+    async def _execute_agent(self, agent_name: str, cycle_id: str = None) -> Dict[str, Any]:
         """Execute the actual agent logic. Returns metadata dict."""
         
-        if agent_name == "internet_crawler":
+        if agent_name == "strategy_planner":
+            return await self._run_strategy_planner()
+        elif agent_name == "ai_scout":
+            return await self._run_ai_scout()
+        elif agent_name == "internet_crawler":
             return await self._run_internet_crawler()
         elif agent_name == "trend_signal":
             return await self._run_trend_signal()
+        elif agent_name == "demand_sense":
+            return await self._run_demand_sense()
+        elif agent_name == "competition_xray":
+            return await self._run_competition_xray()
         elif agent_name == "niche_expander":
             return await self._run_niche_expander()
         elif agent_name == "discovery":
@@ -365,6 +475,12 @@ class AgentOrchestrator:
             return await self._run_supplier_agent()
         elif agent_name == "outreach_engine":
             return await self._run_outreach_engine()
+        elif agent_name == "winner_score":
+            return await self._run_winner_score()
+        elif agent_name == "maintenance":
+            return await self._run_maintenance()
+        elif agent_name == "weight_tuner":
+            return await self._run_weight_tuner()
         elif agent_name == "learning_agent":
             return await self._run_learning_agent()
         
@@ -396,6 +512,65 @@ class AgentOrchestrator:
         return {
             "items_processed": len(all_signals),
             "items_created": len(all_signals),
+        }
+    
+    async def _run_strategy_planner(self) -> Dict[str, Any]:
+        """Run Strategy Planner Agent — weekly strategic research planning."""
+        from agents.strategy_planner import StrategyPlanner
+        
+        planner = StrategyPlanner()
+        result = planner.run_weekly_planning()
+        
+        return {
+            "items_processed": result.get("directives_generated", 0),
+            "items_created": result.get("directives_written", 0),
+        }
+    
+    async def _run_demand_sense(self) -> Dict[str, Any]:
+        """Run Demand Sense Agent — computes real demand proxies from marketplace data."""
+        from tools.demand_sense import DemandSense
+        
+        sense = DemandSense()
+        
+        # Get active niches to analyze
+        from core.database import get_dynamic_niches
+        niches = get_dynamic_niches(region="India", active_only=True, limit=20)
+        
+        total_signals = 0
+        for niche in niches:
+            category = niche.get("category", "")
+            if category:
+                signals = sense.analyze_category(category, "India", limit=10)
+                total_signals += len(signals)
+        
+        # Also get top opportunities across all categories
+        opportunities = sense.get_top_opportunities("India", min_score=60, limit=20)
+        
+        return {
+            "items_processed": len(niches),
+            "items_created": total_signals + len(opportunities),
+        }
+    
+    async def _run_competition_xray(self) -> Dict[str, Any]:
+        """Run Competition X-Ray Agent — deep competitive analysis per category."""
+        from tools.competition_xray import CompetitionXRay
+        
+        xray = CompetitionXRay()
+        
+        # Get active niches to analyze
+        from core.database import get_dynamic_niches
+        niches = get_dynamic_niches(region="India", active_only=True, limit=10)
+        
+        analyzed = 0
+        for niche in niches:
+            category = niche.get("category", "")
+            if category:
+                await xray.analyze_category(category, "India")
+                analyzed += 1
+        
+        return {
+            "items_processed": analyzed,
+            "items_created": analyzed,
         }
     
     async def _run_niche_expander(self) -> Dict[str, Any]:
@@ -440,6 +615,7 @@ class AgentOrchestrator:
     async def _run_gate_engine(self) -> Dict[str, Any]:
         """Run Gate Engine Agent — executes 4-gate pipeline on pending products."""
         from core.gate_engine import GateEngine
+        from core.database import get_3star_reviews, get_connection
         
         engine = GateEngine()
         pending = await self._get_pending_products_for_gates()
@@ -448,22 +624,48 @@ class AgentOrchestrator:
         passed = 0
         
         for product in pending[:20]:  # Limit per run
-            result = await engine.run_full_pipeline(
-                product=product,
-                bsr_current=product.get("amazon_bsr", 50000),
-                price_current=product.get("planned_msrp", 0),
-                reviews_3star=[],  # Would fetch from Problem Miner
-                fob_price=product.get("factory_fob_inr") or product.get("planned_msrp", 0) * 0.25,
-                planned_msrp=product.get("planned_msrp", 0),
-                region=product.get("region", "India"),
-                category=product.get("category", "General"),
-                marketplace="amazon",
-                competitor_count=10,
-            )
+            product_id = product.get("product_id", "")
+            if not product_id:
+                logger.warning("Skipping product with empty product_id")
+                continue
             
-            if result.final_verdict == "PROCEED":
-                passed += 1
-            processed += 1
+            # Verify product still exists in master_products to avoid FK constraint errors
+            try:
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT 1 FROM master_products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0", (product_id,))
+                exists = cur.fetchone() is not None
+                conn.close()
+                if not exists:
+                    logger.warning(f"Product {product_id} no longer exists in master_products, skipping")
+                    continue
+            except Exception as e:
+                logger.warning(f"Failed to verify product {product_id} existence: {e}")
+            
+            reviews_3star = get_3star_reviews(product_id, "amazon", 20) if product_id else []
+            
+            try:
+                result = await engine.run_full_pipeline(
+                    product=product,
+                    bsr_current=product.get("amazon_bsr", 50000),
+                    price_current=product.get("planned_msrp", 0),
+                    reviews_3star=reviews_3star,
+                    fob_price=product.get("factory_fob_inr") or product.get("planned_msrp", 0) * 0.25,
+                    planned_msrp=product.get("planned_msrp", 0),
+                    region=product.get("region", "India"),
+                    category=product.get("category", "General"),
+                    marketplace="amazon",
+                    competitor_count=10,
+                )
+                
+                if result.final_verdict == "PROCEED":
+                    passed += 1
+                processed += 1
+                
+            except Exception as e:
+                logger.error(f"Gate engine failed for product {product_id}: {e}")
+                # Continue with other products instead of failing entire agent
+                continue
         
         return {"items_processed": processed, "items_created": passed}
     
@@ -527,6 +729,56 @@ class AgentOrchestrator:
             "items_created": sent,
         }
     
+    async def _run_winner_score(self) -> Dict[str, Any]:
+        """Run Winner Score Agent — nightly leaderboard computation."""
+        from core.winner_score import WinnerScoreComputer
+        
+        computer = WinnerScoreComputer()
+        result = computer.update_all_scores()
+        
+        return {
+            "items_processed": result.get("updated", 0),
+            "items_created": result.get("updated", 0),
+        }
+    
+    async def _run_maintenance(self) -> Dict[str, Any]:
+        """Run Maintenance Agent — TTL cleanup, VACUUM, backup."""
+        from core.maintenance import MaintenanceManager
+        
+        manager = MaintenanceManager()
+        result = manager.run_full_maintenance()
+        
+        total_cleaned = sum(result.get("ttl_cleanup", {}).values())
+        
+        return {
+            "items_processed": total_cleaned,
+            "items_created": 1 if result.get("backup") else 0,
+        }
+    
+    async def _run_weight_tuner(self) -> Dict[str, Any]:
+        """Run Weight Tuner Agent — quarterly winner score weight optimization."""
+        from core.weight_tuner import WeightTuner
+        
+        tuner = WeightTuner()
+        proposal = tuner.propose_weight_changes()
+        
+        if proposal:
+            rule_id = tuner.record_proposal(proposal)
+            return {
+                "items_processed": 1,
+                "items_created": 1,
+                "proposal": {
+                    "rule_id": rule_id,
+                    "improvement_pct": proposal.improvement_pct,
+                    "proposed_weights": proposal.proposed_weights,
+                },
+            }
+        
+        return {
+            "items_processed": 0,
+            "items_created": 0,
+        }
+    
     async def _run_learning_agent(self) -> Dict[str, Any]:
         """Run Learning Agent — weekly synthesis and rule generation."""
         from core.learning_engine import LearningEngine
@@ -537,6 +789,17 @@ class AgentOrchestrator:
         return {
             "items_processed": result.get("rules_generated", 0),
             "items_created": result.get("rules_added", 0),
+        }
+    
+    async def _run_ai_scout(self) -> Dict[str, Any]:
+        """Run AI Scout Agent — daily autonomous website/platform discovery (10x volume)."""
+        from agents.ai_scout import run_ai_scout
+        
+        result = await run_ai_scout(region="India")
+        
+        return {
+            "items_processed": result.get("total_new", 0),
+            "items_created": result.get("total_new", 0),
         }
     
     # Orchestration loop

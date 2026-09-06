@@ -20,7 +20,7 @@ from datetime import datetime
 from config.settings import settings
 from core.database import (
     init_db, get_connection, record_product_evaluation, get_all_products,
-    update_gate_status, init_product_gates, get_gate_status,
+    update_gate_status, init_product_gates, get_gate_status, get_3star_reviews
 )
 from core.validation import (
     RawProduct, CanonicalProduct, ValidationPipeline, ProductMatcher,
@@ -110,6 +110,10 @@ class V6Pipeline:
         # Use product data or defaults
         fob = fob_price or product.factory_fob_inr or product.retail_price_inr * 0.25
         msrp = planned_msrp or product.retail_price_inr
+        
+        # Fetch 3-star reviews from database if not provided
+        if reviews_3star is None and product.product_id:
+            reviews_3star = get_3star_reviews(product.product_id, "amazon", 20)
         reviews = reviews_3star or []
         
         result = await self.gate_engine.run_full_pipeline(
@@ -173,8 +177,12 @@ class V6Pipeline:
                 "action_plan": f"Gate verdict: {result.final_verdict}",
             }
             
+            import uuid
+            # Generate deterministic UUID from canonical_title + category for reproducibility
+            product_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{product.canonical_title}|{product.category or 'General'}"))
+            
             prod_dict = {
-                "id": product.canonical_title,
+                "id": product_uuid,
                 "name": product.canonical_title,
                 "category": product.category or "General",
                 "region": self.config.region,
@@ -194,10 +202,10 @@ class V6Pipeline:
             record_product_evaluation(prod_dict, eval_dict)
             
             # Initialize gate progress
-            init_product_gates(product.canonical_title)
+            init_product_gates(product_uuid)
             for g in result.gate_results:
                 update_gate_status(
-                    product.canonical_title,
+                    product_uuid,
                     g.gate_number,
                     g.status.value,
                     metadata=g.details,
@@ -231,17 +239,11 @@ async def run_full_pipeline(config: PipelineConfig = None) -> List[PipelineResul
     for product in canonical_products:
         logger.info(f"Processing gates for: {product.canonical_title[:50]}")
         
-        # For now, use mock reviews (in production, fetch from Keepa/review API)
-        mock_reviews = [
-            "Great product but lid leaks after a week",
-            "Good value but paint chips easily",
-        ] if product.amazon_bsr and product.amazon_bsr < 50000 else []
-        
+        # Fetch 3-star reviews from database (run_gates_for_product will fetch if not provided)
         result = await pipeline.run_gates_for_product(
             product=product,
             fob_price=product.factory_fob_inr or product.retail_price_inr * 0.25,
             planned_msrp=product.retail_price_inr,
-            reviews_3star=mock_reviews,
         )
         results.append(result)
     

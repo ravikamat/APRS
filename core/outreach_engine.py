@@ -9,7 +9,7 @@ import asyncio
 import logging
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -227,7 +227,7 @@ Return ONLY valid JSON:
             
             # Update draft status
             if result.success:
-                await update_outreach_draft(draft.draft_id, status=OutreachStatus.SENT.value, sent_at=datetime.utcnow())
+                await update_outreach_draft(draft.draft_id, status=OutreachStatus.SENT.value, sent_at=datetime.now(timezone.utc))
             else:
                 await update_outreach_draft(draft.draft_id, status=OutreachStatus.DRAFT.value, body=draft.body + f"\n\n--- SEND FAILED: {result.error} ---")
         
@@ -275,7 +275,7 @@ Return ONLY valid JSON:
                 server.login(smtp_user, smtp_pass)
                 server.send_message(msg)
             
-            return SendResult(success=True, channel="email", sent_at=datetime.utcnow())
+            return SendResult(success=True, channel="email", sent_at=datetime.now(timezone.utc))
             
         except Exception as e:
             logger.error(f"Email send failed: {e}")
@@ -312,7 +312,7 @@ Return ONLY valid JSON:
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        return SendResult(success=True, channel="whatsapp", message_id=data.get("key", {}).get("id"), sent_at=datetime.utcnow())
+                        return SendResult(success=True, channel="whatsapp", message_id=data.get("key", {}).get("id"), sent_at=datetime.now(timezone.utc))
                     else:
                         text = await resp.text()
                         return SendResult(success=False, channel="whatsapp", error=f"HTTP {resp.status}: {text}")
@@ -341,7 +341,7 @@ Return ONLY valid JSON:
             )
             
             if result.get("message_sent"):
-                return SendResult(success=True, channel="indiamart_chat", sent_at=datetime.utcnow())
+                return SendResult(success=True, channel="indiamart_chat", sent_at=datetime.now(timezone.utc))
             else:
                 return SendResult(success=False, channel="indiamart_chat", error="Failed to send via IndiaMART chat")
                 

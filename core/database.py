@@ -1,6 +1,9 @@
 import sqlite3
 import json
-import datetime
+import time
+import random
+import threading
+from datetime import datetime, timezone
 import os
 import sys
 import traceback
@@ -12,6 +15,17 @@ from pydantic import BaseModel, Field
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+
+# Global lock for database write operations to prevent locking issues
+# Use RLock (reentrant lock) to allow the same thread to acquire the lock multiple times
+_db_write_lock = threading.RLock()
+
+
+def _execute_with_lock(func, *args, **kwargs):
+    """Execute a database function with a global write lock."""
+    with _db_write_lock:
+        return func(*args, **kwargs)
 
 
 def get_db_path() -> Path:
@@ -79,13 +93,31 @@ class ProductEvaluationModel(BaseModel):
 # -------------------------------------------------------------
 def get_connection() -> sqlite3.Connection:
     """Returns connection with WAL mode, busy timeout, and foreign keys ON."""
-    conn = sqlite3.connect(str(get_db_path()), timeout=5.0)
+    conn = sqlite3.connect(str(get_db_path()), timeout=60.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA busy_timeout=60000;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+
+def execute_with_retry(conn: sqlite3.Connection, query: str, params: tuple = (), max_retries: int = 5, base_delay: float = 0.1) -> sqlite3.Cursor:
+    """Execute a query with retry on database locked errors."""
+    import time
+    import random
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return conn.execute(query, params)
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) or "database is locked" in str(e).lower():
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                    time.sleep(delay)
+                    continue
+            raise
+    raise sqlite3.OperationalError("Max retries exceeded for database locked error")
 
 def _column_exists(cur, table: str, col: str) -> bool:
     cur.execute(f"PRAGMA table_info({table})")
@@ -109,9 +141,9 @@ def init_db():
             estimated_cac REAL NOT NULL DEFAULT 0.0,
             net_profit_pct REAL NOT NULL DEFAULT 0.0,
             worst_case_stress_margin_pct REAL NOT NULL DEFAULT 0.0,
-            status TEXT NOT NULL DEFAULT 'PENDING',
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','PASS','FAIL','BLOCKED','SOURCING_NEGOTIATION','SAMPLE_ORDERED','SAMPLE_APPROVED','QC_IN_PROGRESS','PO_ISSUED','SHIPPED','LIVE','AI_REJECTED')),
             overall_score REAL NOT NULL DEFAULT 0.0,
-            consensus_status TEXT NOT NULL DEFAULT 'CONSENSUS_PASS',
+            consensus_status TEXT NOT NULL DEFAULT 'CONSENSUS_PASS' CHECK(consensus_status IN ('CONSENSUS_PASS','CONSENSUS_FAIL','OVERRIDDEN')),
             action_plan TEXT,
             sourcing_cluster TEXT,
             marketplace_url TEXT,
@@ -132,7 +164,15 @@ def init_db():
             ai_rejection_reason TEXT,
             ai_reasoning TEXT,
             ai_rejection_category TEXT,
-            ai_confidence REAL DEFAULT 0.0
+            ai_confidence REAL DEFAULT 0.0,
+            is_deleted INTEGER DEFAULT 0 CHECK(is_deleted IN (0,1)),
+            is_shortlisted INTEGER DEFAULT 0 CHECK(is_shortlisted IN (0,1)),
+            deletion_reason TEXT,
+            deleted_at TIMESTAMP,
+            trend_source TEXT,
+            trend_confidence_score REAL DEFAULT 0.0,
+            platform_availability TEXT,
+            custom_tags TEXT
         )
     ''')
     
@@ -290,7 +330,7 @@ def init_db():
             velocity_score REAL DEFAULT 0.0,
             longevity_days INTEGER DEFAULT 7,
             raw_signal_json TEXT,
-            status TEXT DEFAULT 'ACTIVE',
+            status TEXT DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','ARCHIVED','EXPIRED')),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -300,19 +340,35 @@ def init_db():
         CREATE TABLE IF NOT EXISTS multi_platform_listings (
             listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_id TEXT NOT NULL,
-            platform TEXT NOT NULL,
+            platform TEXT NOT NULL CHECK(platform IN ('amazon','flipkart','meesho','myntra','shopify','other')),
             title TEXT NOT NULL,
             price REAL NOT NULL,
-            currency TEXT DEFAULT 'INR',
+            currency TEXT DEFAULT 'INR' CHECK(currency IN ('INR','USD','EUR','AED')),
             rating REAL,
             review_count INTEGER DEFAULT 0,
             listing_url TEXT NOT NULL,
             seller_name TEXT,
-            in_stock INTEGER DEFAULT 1,
+            in_stock INTEGER DEFAULT 1 CHECK(in_stock IN (0,1)),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
         )
     ''')
+
+    # 9b. KEEPA CACHE TABLE — Cached Keepa API responses for BSR/Price history
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS keepa_cache (
+            cache_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asin TEXT NOT NULL,
+            domain TEXT NOT NULL DEFAULT 'IN',
+            data_type TEXT NOT NULL CHECK(data_type IN ('bsr','price','sales','rating','reviews')),
+            raw_json TEXT NOT NULL,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            UNIQUE(asin, domain, data_type)
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_keepa_asin_type ON keepa_cache(asin, data_type);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_keepa_expires ON keepa_cache(expires_at);')
 
     # 10. SWARM MULTI-AGENT AUDIT & BACKTRACK LOG TABLE
     cur.execute('''
@@ -650,9 +706,6 @@ def init_db():
     cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_product ON url_validation_log(product_id);')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_url ON url_validation_log(url);')
 
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_product ON url_validation_log(product_id);')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_url_validation_log_url ON url_validation_log(url);')
-
     # ── Learned Rules — persistent rule storage from rule_engine.py ────────────────
     cur.execute('''
         CREATE TABLE IF NOT EXISTS learned_rules (
@@ -732,19 +785,19 @@ def init_db():
             supplier_id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_id TEXT NOT NULL,
             company_name TEXT NOT NULL,
-            platform TEXT NOT NULL,
+            platform TEXT NOT NULL CHECK(platform IN ('indiamart','alibaba','exportersindia','tradeindia','other')),
             profile_url TEXT,
             contact_phone TEXT,
             contact_email TEXT,
             gst_number TEXT,
             moq_estimate INTEGER,
-            verification_badge INTEGER DEFAULT 0,
+            verification_badge INTEGER DEFAULT 0 CHECK(verification_badge IN (0,1)),
             product_categories TEXT,
             location TEXT,
-            gst_verified INTEGER DEFAULT 0,
+            gst_verified INTEGER DEFAULT 0 CHECK(gst_verified IN (0,1)),
             gst_check_date TEXT,
             verification_score REAL DEFAULT 0.0,
-            status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING, VERIFIED, REJECTED, CONTACTED
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','VERIFIED','REJECTED','CONTACTED')),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
@@ -761,8 +814,8 @@ def init_db():
             product_id TEXT NOT NULL,
             subject TEXT NOT NULL,
             body TEXT NOT NULL,
-            channel TEXT NOT NULL DEFAULT 'email',  -- email, whatsapp, indiamart_chat
-            status TEXT NOT NULL DEFAULT 'DRAFT',  -- DRAFT, APPROVED, REJECTED, SENT, HOLD
+            channel TEXT NOT NULL DEFAULT 'email' CHECK(channel IN ('email','whatsapp','indiamart_chat')),
+            status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','APPROVED','REJECTED','SENT','HOLD')),
             approved_by TEXT,
             approved_at TIMESTAMP,
             sent_at TIMESTAMP,
@@ -780,11 +833,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS supplier_conversations (
             conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
             supplier_id INTEGER NOT NULL,
-            channel TEXT NOT NULL,  -- email, whatsapp, indiamart_chat
-            direction TEXT NOT NULL,  -- inbound, outbound
+            channel TEXT NOT NULL CHECK(channel IN ('email','whatsapp','indiamart_chat')),
+            direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
             message_text TEXT,
             message_id TEXT,  -- external message ID (e.g. WhatsApp message ID)
-            status TEXT NOT NULL DEFAULT 'RECEIVED',  -- RECEIVED, READ, REPLIED
+            status TEXT NOT NULL DEFAULT 'RECEIVED' CHECK(status IN ('RECEIVED','READ','REPLIED')),
             received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (supplier_id) REFERENCES supplier_profiles(supplier_id) ON DELETE CASCADE
         )
@@ -797,16 +850,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS problem_opportunities (
             opportunity_id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_id TEXT NOT NULL,
-            source TEXT NOT NULL,  -- amazon_qa, amazon_reviews, reddit, youtube, flipkart, quora, trustpilot
+            source TEXT NOT NULL CHECK(source IN ('amazon_qa','amazon_reviews','reddit','youtube','flipkart','quora','trustpilot','other')),
             source_url TEXT,
             problem_text TEXT NOT NULL,
-            problem_category TEXT,  -- functional, quality, ux, durability, missing_feature
-            severity TEXT,  -- critical, major, minor
+            problem_category TEXT CHECK(problem_category IN ('functional','quality','ux','durability','missing_feature','other')),
+            severity TEXT CHECK(severity IN ('critical','major','minor')),
             frequency_estimate INTEGER,  -- estimated users affected (1-10 scale)
             suggested_solution TEXT,
             market_size_estimate TEXT,
             competitor_solution TEXT,
-            status TEXT NOT NULL DEFAULT 'IDENTIFIED',  -- IDENTIFIED, VALIDATED, IN_PROGRESS, LAUNCHED
+            status TEXT NOT NULL DEFAULT 'IDENTIFIED' CHECK(status IN ('IDENTIFIED','VALIDATED','IN_PROGRESS','LAUNCHED')),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE CASCADE
@@ -841,6 +894,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS pending_human_decisions (
             decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
             agent_name TEXT NOT NULL,
+            product_id TEXT,
             task_type TEXT NOT NULL,
             context_json TEXT NOT NULL,
             options_json TEXT NOT NULL,  -- [{"label": "Approve", "action": "approve"}, ...]
@@ -849,9 +903,9 @@ def init_db():
             decided_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP,  -- auto-expire after 24h
-            status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING, DECIDED, EXPIRED, SKIPPED
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','DECIDED','EXPIRED','SKIPPED')),
             priority INTEGER DEFAULT 1,
-            FOREIGN KEY (agent_name) REFERENCES master_products(product_id)  -- soft ref, not enforced
+            FOREIGN KEY (product_id) REFERENCES master_products(product_id) ON DELETE SET NULL
         )
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pending_decisions_agent ON pending_human_decisions(agent_name);')
@@ -909,7 +963,7 @@ def record_product_evaluation(prod_dict: dict, eval_dict: dict, model_name: str 
         conn = get_connection()
         cur = conn.cursor()
         
-        today_str = datetime.date.today().isoformat()
+        today_str = datetime.now(timezone.utc).date().isoformat()
         
         # Upsert into master_products (including V6 trend & shortlist fields + AI Supervision fields)
         cur.execute('''
@@ -1150,21 +1204,34 @@ def record_trend_signal(platform: str, keyword: str, category: str = "General", 
                         search_volume_est: int = 0, velocity_score: float = 0.0,
                         longevity_days: int = 7, raw_json: dict = None) -> int:
     """Records an emerging social/search trend signal from Instagram, TikTok, Meta, Google, or Reddit."""
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        raw_str = json.dumps(raw_json or {})
-        cur.execute('''
-            INSERT INTO trend_signals (platform, keyword, trend_category, region, search_volume_est, velocity_score, longevity_days, raw_signal_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (platform, keyword, category, region, search_volume_est, velocity_score, longevity_days, raw_str))
-        signal_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return signal_id
-    except Exception as e:
-        print(f"[DB Record Trend Error]: {e}")
-        return 0
+    max_retries = 5
+    base_delay = 0.1
+    
+    for attempt in range(5):
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            raw_str = json.dumps(raw_json or {})
+            cur.execute('''
+                INSERT INTO trend_signals (platform, keyword, trend_category, region, search_volume_est, velocity_score, longevity_days, raw_signal_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (platform, keyword, category, region, search_volume_est, velocity_score, longevity_days, raw_str))
+            signal_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+            return signal_id
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower() and attempt < 4:
+                import time, random
+                delay = 0.1 * (2 ** attempt) + random.uniform(0, 0.1)
+                time.sleep(delay)
+                continue
+            print(f"[DB Record Trend Error]: {e}")
+            return 0
+        except Exception as e:
+            print(f"[DB Record Trend Error]: {e}")
+            return 0
+    return 0
 
 def get_active_trend_signals(region: str = None, limit: int = 50) -> List[Dict[str, Any]]:
     """Fetches active trend signals sorted by velocity and longevity."""
@@ -1177,6 +1244,32 @@ def get_active_trend_signals(region: str = None, limit: int = 50) -> List[Dict[s
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def get_trend_signals(category: str = "", region: str = "India", limit: int = 50) -> List[Dict[str, Any]]:
+    """Fetches trend signals filtered by category and region."""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    query = "SELECT * FROM trend_signals WHERE status = 'ACTIVE'"
+    params = []
+    
+    if region:
+        query += " AND region = ?"
+        params.append(region)
+    
+    if category:
+        query += " AND (trend_category = ? OR keyword LIKE ?)"
+        params.extend([category, f"%{category}%"])
+    
+    query += " ORDER BY velocity_score DESC, created_at DESC LIMIT ?"
+    params.append(limit)
+    
+    cur.execute(query, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
 
 def record_multi_platform_listing(product_id: str, platform: str, title: str, price: float,
                                   listing_url: str, rating: float = None, review_count: int = 0,
@@ -1195,6 +1288,82 @@ def record_multi_platform_listing(product_id: str, platform: str, title: str, pr
     except Exception as e:
         print(f"[DB Multi-Platform Listing Error]: {e}")
         return False
+
+def record_multi_platform_listing(product_id: str, platform: str, title: str, price: float,
+                                  listing_url: str, rating: float = None, review_count: int = 0,
+                                  currency: str = "INR", seller_name: str = None) -> bool:
+    """Stores cross-platform listings (Flipkart, Meesho, Myntra, Amazon, Shopify)."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO multi_platform_listings (product_id, platform, title, price, currency, rating, review_count, listing_url, seller_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (product_id, platform, title, float(price), currency, rating, int(review_count), listing_url, seller_name))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[DB Multi-Platform Listing Error]: {e}")
+        return False
+
+
+# ── KEEPA CACHE ──────────────────────────────────────────────────────────────────
+
+def set_keepa_cache(asin: str, domain: str, data_type: str, raw_json: str, ttl_hours: int = 24) -> bool:
+    """Store Keepa API response in cache with TTL."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        expires_at = datetime.now(timezone.utc).replace(microsecond=0)
+        expires_at = expires_at.replace(hour=expires_at.hour + ttl_hours)
+        cur.execute('''
+            INSERT INTO keepa_cache (asin, domain, data_type, raw_json, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(asin, domain, data_type) DO UPDATE SET
+                raw_json = excluded.raw_json,
+                expires_at = excluded.expires_at,
+                fetched_at = CURRENT_TIMESTAMP
+        ''', (asin, domain, data_type, raw_json, expires_at.isoformat()))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[DB Keepa Cache Error]: {e}")
+        return False
+
+
+def get_keepa_cache(asin: str, domain: str, data_type: str) -> Optional[Dict]:
+    """Retrieve valid Keepa cache entry."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT * FROM keepa_cache 
+            WHERE asin = ? AND domain = ? AND data_type = ? AND expires_at > CURRENT_TIMESTAMP
+        ''', (asin, domain, data_type))
+        row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"[DB Keepa Cache Error]: {e}")
+        return None
+
+
+def clean_expired_keepa_cache() -> int:
+    """Remove expired Keepa cache entries. Returns count of deleted rows."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM keepa_cache WHERE expires_at <= CURRENT_TIMESTAMP')
+        deleted = cur.rowcount
+        conn.commit()
+        conn.close()
+        return deleted
+    except Exception as e:
+        print(f"[DB Keepa Cache Clean Error]: {e}")
+        return 0
+
 
 def record_swarm_audit_log(product_id: str, agent_role: str, action: str, reasoning: str,
                            input_summary: str = "", backtrack_target_stage: str = None) -> bool:
@@ -1381,37 +1550,37 @@ def update_gate_status(product_id: str, gate_number: int, status: str, blocked_r
     if status not in valid_statuses:
         raise ValueError(f"Invalid status: {status}. Must be one of {valid_statuses}")
     if gate_number not in GATE_ORDER:
-        raise ValueError(f"Invalid gate_number: {gate_number}. Must be 1-6")
+        raise ValueError(f"Invalid gate_number: {gate_number}. Must be 1-5")
     
     try:
         conn = get_connection()
         cur = conn.cursor()
         
-        now = datetime.datetime.now().isoformat()
-        metadata_json = json.dumps(metadata or {})
+        now = datetime.now(timezone.utc).isoformat()
+        details_json = json.dumps(metadata or {})
         
         if status == 'IN_PROGRESS':
             cur.execute('''
                 UPDATE product_gate_progress
-                SET status = ?, started_at = COALESCE(started_at, ?), blocked_reason = ?, metadata_json = ?, completed_by = ?
+                SET status = ?, started_at = COALESCE(started_at, ?), blocked_reason = ?, details_json = ?, completed_by = ?
                 WHERE product_id = ? AND gate_number = ?
-            ''', (status, now, blocked_reason, metadata_json, completed_by, product_id, gate_number))
+            ''', (status, now, blocked_reason, details_json, completed_by, product_id, gate_number))
         elif status in ('PASS', 'FAIL', 'OVERRIDDEN'):
             cur.execute('''
                 UPDATE product_gate_progress
-                SET status = ?, completed_at = ?, blocked_reason = ?, metadata_json = ?, completed_by = ?
+                SET status = ?, completed_at = ?, blocked_reason = ?, details_json = ?, completed_by = ?
                 WHERE product_id = ? AND gate_number = ?
-            ''', (status, now, blocked_reason, metadata_json, completed_by, product_id, gate_number))
+            ''', (status, now, blocked_reason, details_json, completed_by, product_id, gate_number))
         elif status == 'BLOCKED':
             cur.execute('''
                 UPDATE product_gate_progress
-                SET status = ?, blocked_reason = ?, metadata_json = ?, completed_by = ?
+                SET status = ?, blocked_reason = ?, details_json = ?, completed_by = ?
                 WHERE product_id = ? AND gate_number = ?
-            ''', (status, blocked_reason, metadata_json, completed_by, product_id, gate_number))
+            ''', (status, blocked_reason, details_json, completed_by, product_id, gate_number))
         else:  # PENDING
             cur.execute('''
                 UPDATE product_gate_progress
-                SET status = ?, started_at = NULL, completed_at = NULL, blocked_reason = NULL, metadata_json = '{}', completed_by = NULL
+                SET status = ?, started_at = NULL, completed_at = NULL, blocked_reason = NULL, details_json = '{}', completed_by = NULL
                 WHERE product_id = ? AND gate_number = ?
             ''', (status, product_id, gate_number))
         
@@ -1655,6 +1824,71 @@ def get_defect_clusters(product_id: Optional[str] = None, limit: int = 100) -> L
         ''', (product_id, limit))
     else:
         cur.execute('SELECT * FROM defect_clusters ORDER BY created_at DESC LIMIT ?', (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+# ──────────────────────────────────────────────────────────────────────────────
+# REVIEW SNAPSHOTS CRUD
+# ──────────────────────────────────────────────────────────────────────────────
+
+def record_review_snapshot(
+    product_id: str,
+    marketplace: str,
+    rating: float,
+    review_text: str,
+    review_title: str = "",
+    reviewer_name: str = "",
+    review_date: str = "",
+    helpful_votes: int = 0,
+    verified_purchase: int = 0,
+) -> int:
+    """Records a single review snapshot for defect mining."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        INSERT INTO review_snapshots (
+            product_id, marketplace, rating, review_text, review_title,
+            reviewer_name, review_date, helpful_votes, verified_purchase
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        product_id, marketplace, rating, review_text, review_title,
+        reviewer_name, review_date, helpful_votes, verified_purchase
+    ))
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return sid
+
+def get_3star_reviews(product_id: str, marketplace: str = "amazon", limit: int = 20) -> List[str]:
+    """Fetches 3-star review texts for a product (for Gate 2 defect mining)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        SELECT review_text FROM review_snapshots 
+        WHERE product_id = ? AND marketplace = ? AND rating = 3.0
+        ORDER BY helpful_votes DESC, scraped_at DESC LIMIT ?
+    ''', (product_id, marketplace, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return [row[0] for row in rows if row[0]]
+
+def get_review_snapshots(product_id: str, marketplace: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """Fetches all review snapshots for a product."""
+    conn = get_connection()
+    cur = conn.cursor()
+    if marketplace:
+        cur.execute('''
+            SELECT * FROM review_snapshots 
+            WHERE product_id = ? AND marketplace = ?
+            ORDER BY rating ASC, helpful_votes DESC LIMIT ?
+        ''', (product_id, marketplace, limit))
+    else:
+        cur.execute('''
+            SELECT * FROM review_snapshots 
+            WHERE product_id = ?
+            ORDER BY rating ASC, helpful_votes DESC LIMIT ?
+        ''', (product_id, limit))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -1958,23 +2192,31 @@ def update_niche_scan(niche_id: int, products_found: int = 0):
 def record_seed_keyword(keyword: str, region: str = "India", source_platform: str = "nim_generated",
                          parent_keyword: str = "", velocity_score: float = 50.0) -> Optional[int]:
     """Insert a dynamic seed keyword. Skips duplicates silently."""
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute('''
-            INSERT INTO dynamic_seed_keywords (keyword, region, source_platform, parent_keyword, velocity_score)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(keyword, region) DO UPDATE SET
-                velocity_score = MAX(dynamic_seed_keywords.velocity_score, excluded.velocity_score),
-                is_active = 1
-        ''', (keyword, region, source_platform, parent_keyword, velocity_score))
-        conn.commit()
-        sid = cur.lastrowid
-        conn.close()
-        return sid
-    except Exception as e:
-        conn.close()
-        return None
+    for attempt in range(5):
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute('''
+                INSERT INTO dynamic_seed_keywords (keyword, region, source_platform, parent_keyword, velocity_score)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(keyword, region) DO UPDATE SET
+                    velocity_score = MAX(dynamic_seed_keywords.velocity_score, excluded.velocity_score),
+                    is_active = 1
+            ''', (keyword, region, source_platform, parent_keyword, velocity_score))
+            conn.commit()
+            sid = cur.lastrowid
+            conn.close()
+            return sid
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower():
+                import time, random
+                delay = 0.1 * (2 ** attempt) + random.uniform(0, 0.1)
+                time.sleep(delay)
+                continue
+            return None
+        except Exception:
+            return None
+    return None
 
 
 def get_seed_keywords(region: str = "India", active_only: bool = True, limit: int = 50) -> List[Dict]:
@@ -1995,11 +2237,23 @@ def get_seed_keywords(region: str = "India", active_only: bool = True, limit: in
 
 def update_seed_usage(seed_id: int):
     """Increment usage counter for a seed keyword."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("UPDATE dynamic_seed_keywords SET times_used = times_used + 1, last_used_at = CURRENT_TIMESTAMP WHERE seed_id = ?", (seed_id,))
-    conn.commit()
-    conn.close()
+    for attempt in range(5):
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE dynamic_seed_keywords SET times_used = times_used + 1, last_used_at = CURRENT_TIMESTAMP WHERE seed_id = ?", (seed_id,))
+            conn.commit()
+            conn.close()
+            return
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower():
+                import time, random
+                delay = 0.1 * (2 ** attempt) + random.uniform(0, 0.1)
+                time.sleep(delay)
+                continue
+            return
+        except Exception:
+            return
 
 
 # ── UNIVERSAL MARKETPLACE SCRAPER CONFIG CRUD ───────────────────────────────────
@@ -2821,7 +3075,7 @@ async def record_pending_decision(
     cur = conn.cursor()
     try:
         decision_id = str(uuid.uuid4())[:8]
-        expires_at = (datetime.utcnow() + timedelta(hours=24)).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
         
         cur.execute('''
             INSERT INTO pending_human_decisions (
@@ -3056,6 +3310,92 @@ def get_recent_swarm_audit_log(limit: int = 50, agent_name: str = None) -> List[
     conn.close()
     return rows
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PENDING HUMAN DECISIONS CRUD
+# ──────────────────────────────────────────────────────────────────────────────
+
+def add_pending_human_decision(
+    agent_name: str,
+    product_id: str,
+    task_type: str,
+    context_json: str,
+    options_json: str,
+    priority: str = "NORMAL",
+    expires_in_hours: int = 24,
+) -> int:
+    """Add a decision requiring human input."""
+    import json
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute('''
+        INSERT INTO pending_human_decisions (
+            agent_name, product_id, task_type, context_json, options_json,
+            priority, expires_at, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?), 'PENDING', datetime('now'))
+    ''', (
+        agent_name, product_id, task_type, context_json, options_json,
+        priority, f'+{expires_in_hours} hours'
+    ))
+    
+    did = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return did
+
+
+def get_pending_human_decisions(
+    agent_name: str = None,
+    status: str = "PENDING",
+    limit: int = 50
+) -> List[Dict[str, Any]]:
+    """Get pending human decisions."""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    query = "SELECT * FROM pending_human_decisions WHERE status = ?"
+    params = [status]
+    
+    if agent_name:
+        query += " AND agent_name = ?"
+        params.append(agent_name)
+    
+    query += " ORDER BY priority DESC, created_at ASC LIMIT ?"
+    params.append(limit)
+    
+    cur.execute(query, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def resolve_pending_human_decision(
+    decision_id: int,
+    decision: str,
+    decided_by: str,
+    notes: str = ""
+) -> bool:
+    """Resolve a pending human decision."""
+    import json
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute('''
+        UPDATE pending_human_decisions
+        SET decision = ?, decided_by = ?, decided_at = datetime('now'),
+            status = 'RESOLVED', updated_at = datetime('now')
+        WHERE decision_id = ?
+    ''', (decision, decided_by, decision_id))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SWARM AUDIT LOG
+# ──────────────────────────────────────────────────────────────────────────────
 
 def log_swarm_audit(agent_name: str, action: str, details: str = None, 
                     product_id: str = None, cycle_num: int = None, 

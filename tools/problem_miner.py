@@ -127,7 +127,7 @@ class ProblemMiner:
         # 2. Amazon 3-star reviews
         if asin:
             try:
-                review_opportunities = await self._mine_amazon_3star_reviews(asin)
+                review_opportunities = await self._mine_amazon_3star_reviews(product_id, asin)
                 all_opportunities.extend(review_opportunities)
             except Exception as e:
                 logger.warning(f"Amazon 3-star reviews failed for {asin}: {e}")
@@ -234,12 +234,52 @@ Return as JSON array."""
             logger.warning(f"Amazon Q&A mining failed: {e}")
             return []
 
-    async def _mine_amazon_3star_reviews(self, asin: str) -> List[Dict]:
+    async def _mine_amazon_3star_reviews(self, product_id: str, asin: str) -> List[Dict]:
         """Mine 3-star reviews for actionable defects."""
-        # This would use WebAgent to scrape 3-star review page
-        # URL: https://www.amazon.in/product-reviews/{asin}/?filterByStar=three_star
-        # For now, return empty - would need WebAgent to navigate review pages
-        return []
+        url = f"https://www.amazon.in/product-reviews/{asin}/?filterByStar=three_star"
+        
+        prompt = f"""Visit the Amazon 3-star reviews page for ASIN {asin}.
+Extract up to 20 review texts. For each review, extract:
+- review_text (the full review body)
+- review_title (if present)
+- reviewer_name (if visible)
+- review_date (if visible)
+- helpful_votes (number if shown, else 0)
+- verified_purchase (true/false if badge visible)
+
+Return as JSON array of objects with these fields."""
+        
+        try:
+            result = await self.web_agent.extract_from_url(
+                url=url,
+                schema={"reviews": "array"},
+                task_description=prompt
+            )
+            reviews = result.get("reviews", [])
+            
+            # Store in database using master_products product_id
+            from core.database import record_review_snapshot
+            for review in reviews:
+                try:
+                    record_review_snapshot(
+                        product_id=product_id,
+                        marketplace="amazon",
+                        rating=3.0,
+                        review_text=review.get("review_text", "")[:2000],
+                        review_title=review.get("review_title", "")[:200],
+                        reviewer_name=review.get("reviewer_name", "")[:100],
+                        review_date=review.get("review_date", ""),
+                        helpful_votes=int(review.get("helpful_votes", 0) or 0),
+                        verified_purchase=1 if review.get("verified_purchase", False) else 0,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to store review: {e}")
+            
+            logger.info(f"Scraped {len(reviews)} 3-star reviews for product {product_id} (ASIN {asin})")
+            return reviews
+        except Exception as e:
+            logger.warning(f"Amazon 3-star review scraping failed for ASIN {asin}: {e}")
+            return []
 
     async def _mine_flipkart_reviews(self, product_id: str) -> List[Dict]:
         """Mine Flipkart reviews for defects."""

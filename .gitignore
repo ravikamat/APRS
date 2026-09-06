@@ -8,10 +8,14 @@
 # Database
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 data/*.db
 data/*.db.*
+data/*.db-*
+data/backups/
 
 # Python
 __pycache__/
@@ -66,6 +70,9 @@ trade/
 tmp/
 temp/
 *.tmp
+graphify-out/
+tmp_tests/
+test_results.json
 
 # Coverage reports
 htmlcov/

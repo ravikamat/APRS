@@ -2,7 +2,7 @@
 Meeting Document Manager - Generates Word documents from meeting audit logs.
 """
 import os
-import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Try to import python-docx, but handle gracefully if not installed
@@ -30,7 +30,7 @@ def generate_meeting_word_doc(session_id: str = None) -> str:
         history = get_meeting_history(session_id=session_id)
         with open(fallback_path, 'w', encoding='utf-8') as f:
             f.write(f"Meeting Transcript - Session: {session_id}\n")
-            f.write(f"Generated: {datetime.datetime.now().isoformat()}\n\n")
+            f.write(f"Generated: {datetime.now(timezone.utc).isoformat()}\n\n")
             for msg in history:
                 f.write(f"[{msg.get('timestamp', '')}] {msg.get('speaker_name', '')} ({msg.get('speaker_role', '')}): {msg.get('response_text', '')}\n\n")
         return fallback_path
@@ -55,7 +55,7 @@ def generate_meeting_word_doc(session_id: str = None) -> str:
     
     p = doc.add_paragraph()
     p.add_run(f"Generated: ").bold = True
-    p.add_run(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    p.add_run(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
     
     p = doc.add_paragraph()
     p.add_run(f"Total Messages: ").bold = True

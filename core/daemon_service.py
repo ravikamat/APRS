@@ -13,7 +13,7 @@ import time
 import logging
 import asyncio
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
 
@@ -24,7 +24,7 @@ if str(_ROOT) not in sys.path:
 from core.database import (
     init_db, get_connection, get_all_products, get_gate_status,
     reset_product_gates, update_gate_status, get_dynamic_niches,
-    get_live_table_counts, log_swarm_audit
+    get_live_table_counts, log_swarm_audit, get_3star_reviews
 )
 from core.agent_orchestrator import AgentOrchestrator, OrchestratorMode, AgentState, AgentRunResult, AgentConfig
 
@@ -92,7 +92,7 @@ class DaemonService:
 
     def log(self, message: str, level: str = "INFO"):
         """Append log message with timestamp."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
         entry = f"[{timestamp}] [{level}] {message}"
         self.recent_logs.append(entry)
         if len(self.recent_logs) > self._max_logs:
@@ -209,7 +209,7 @@ class DaemonService:
                 # Update telemetry
                 stats = self.agent_telemetry[agent_name]
                 stats["runs"] += 1
-                stats["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                stats["last_run"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                 stats["last_duration_ms"] = duration_ms
                 
                 if result.state == AgentState.COMPLETED:
@@ -264,7 +264,7 @@ class DaemonService:
             res: AgentRunResult = temp_loop.run_until_complete(_run())
             stats = self.agent_telemetry[agent_name]
             stats["runs"] += 1
-            stats["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            stats["last_run"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             stats["last_duration_ms"] = res.duration_ms
             if res.state == AgentState.COMPLETED:
                 stats["successes"] += 1
@@ -321,12 +321,15 @@ class DaemonService:
         # 4. Run through GateEngine
         engine = GateEngine()
         
+        # Fetch 3-star reviews from database
+        reviews_3star = get_3star_reviews(product_id, "amazon", 20)
+        
         async def _eval():
             return await engine.run_full_pipeline(
                 product=canonical,
                 bsr_current=canonical.amazon_bsr or 15000,
                 price_current=canonical.retail_price_inr,
-                reviews_3star=[],
+                reviews_3star=reviews_3star,
                 fob_price=canonical.factory_fob_inr or (canonical.retail_price_inr * 0.25),
                 planned_msrp=canonical.retail_price_inr,
                 region=canonical.region,

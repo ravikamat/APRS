@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -68,7 +68,7 @@ class LearningEngine:
             SynthesisResult with counts and summary
         """
         logger.info("Starting weekly learning synthesis")
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
 
         result = SynthesisResult()
 
@@ -95,7 +95,7 @@ class LearningEngine:
         summary = await self._generate_weekly_summary()
         result.summary = summary
 
-        duration = (datetime.utcnow() - start_time).total_seconds()
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.info(f"Weekly synthesis complete in {duration:.1f}s: {result}")
 
         return result
@@ -159,7 +159,7 @@ class LearningEngine:
             for f in failures[:10]
         ])
 
-        rule_id = f"learned_{category.lower().replace(' ', '_')}_gate{gate}_{datetime.now().strftime('%Y%m%d')}"
+        rule_id = f"learned_{category.lower().replace(' ', '_')}_gate{gate}_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
         name = f"Prevent {category} Gate {gate} Failures"
         description = f"Auto-generated from {len(failures)} failures"
 

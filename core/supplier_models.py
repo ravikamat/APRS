@@ -5,7 +5,7 @@ Pydantic models for supplier profiles, outreach drafts, conversations,
 and verification workflows. Used for validation and serialization.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, EmailStr, field_validator
@@ -107,8 +107,8 @@ class SupplierProfile(BaseModel):
     gst_check_date: Optional[str] = None
     verification_score: float = Field(default=0.0, ge=0.0, le=1.0)
     status: SupplierStatus = SupplierStatus.PENDING
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=datetime.now(timezone.utc))
     
     @field_validator("gst_number")
     @classmethod
@@ -139,8 +139,8 @@ class OutreachDraft(BaseModel):
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
     sent_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=datetime.now(timezone.utc))
     
     model_config = {"use_enum_values": True}
 
@@ -155,7 +155,7 @@ class SupplierConversation(BaseModel):
     message_text: str
     message_id: Optional[str] = None  # External message ID (WhatsApp, email ID, etc.)
     status: ConversationStatus = ConversationStatus.RECEIVED
-    received_at: datetime = Field(default_factory=datetime.utcnow)
+    received_at: datetime = Field(default_factory=datetime.now(timezone.utc))
     
     model_config = {"use_enum_values": True}
 
@@ -175,8 +175,8 @@ class ProblemOpportunity(BaseModel):
     market_size_estimate: Optional[str] = None
     competitor_solution: Optional[str] = None
     status: ProblemStatus = ProblemStatus.IDENTIFIED
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=datetime.now(timezone.utc))
     
     model_config = {"use_enum_values": True}
 

@@ -10,7 +10,7 @@ import logging
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 from enum import Enum
@@ -177,7 +177,7 @@ class TaskQueue:
     async def _execute_task(self, task: ScheduledTask):
         """Execute a single task."""
         task.status = TaskStatus.RUNNING
-        task.started_at = datetime.utcnow()
+        task.started_at = datetime.now(timezone.utc)
         self._running[task.task_id] = task
         
         logger.info(f"Executing task {task.task_id} ({task.name})")
@@ -187,7 +187,7 @@ class TaskQueue:
             result = await self._execute_agent_task(task)
             
             task.status = TaskStatus.COMPLETED
-            task.completed_at = datetime.utcnow()
+            task.completed_at = datetime.now(timezone.utc)
             self._completed[task.task_id] = task
             del self._running[task.task_id]
             
@@ -206,7 +206,7 @@ class TaskQueue:
     async def _handle_task_failure(self, task: ScheduledTask, error: Exception):
         """Handle task failure with retry logic."""
         task.retry_count += 1
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
         
         if task.retry_count >= task.max_retries:
             task.status = TaskStatus.FAILED
@@ -266,9 +266,43 @@ class Scheduler:
             "max_concurrent": max_concurrent,
             "timeout_seconds": timeout_seconds,
             "last_run": None,
-            "next_run": datetime.utcnow(),
+            "next_run": datetime.now(timezone.utc),
         }
         logger.info(f"Registered agent: {agent_name} (interval: {interval_seconds}s)")
+
+    def register_maintenance_job(
+        self,
+        job_name: str,
+        interval_seconds: int,
+        callback: Callable[[], Awaitable[bool]],
+        priority: TaskPriority = TaskPriority.LOW,
+        dependencies: List[str] = None,
+    ):
+        """Register a maintenance job (backup, VACUUM, etc.) for periodic execution.
+        
+        Maintenance jobs run at low priority and don't block agents.
+        """
+        async def maintenance_wrapper():
+            try:
+                result = await callback()
+                return {"success": result}
+            except Exception as e:
+                logger.error(f"Maintenance job {job_name} failed: {e}")
+                return {"success": False, "error": str(e)}
+        
+        self._agent_callbacks[job_name] = maintenance_wrapper
+        self._schedules[job_name] = {
+            "interval_seconds": interval_seconds,
+            "callback": maintenance_wrapper,
+            "priority": priority,
+            "dependencies": dependencies or [],
+            "max_concurrent": 1,
+            "timeout_seconds": 3600,
+            "last_run": None,
+            "next_run": datetime.now(timezone.utc),
+            "is_maintenance": True,
+        }
+        logger.info(f"Registered maintenance job: {job_name} (interval: {interval_seconds}s)")
     
     async def start(self):
         """Start the scheduler."""
@@ -293,16 +327,16 @@ class Scheduler:
         """Main scheduler loop - checks for due tasks every minute."""
         while True:
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 
                 for agent_name, schedule in self._schedules.items():
-                    if schedule["next_run"] <= datetime.utcnow():
+                    if schedule["next_run"] <= datetime.now(timezone.utc):
                         # Check if already running
                         # (In a real implementation, check running tasks)
                         
                         # Create and enqueue task
                         task = ScheduledTask(
-                            task_id=f"{schedule['agent_name']}_{int(datetime.utcnow().timestamp())}",
+                            task_id=f"{schedule['agent_name']}_{int(datetime.now(timezone.utc).timestamp())}",
                             name=schedule["agent_name"],
                             agent_name=schedule["agent_name"],
                             priority=schedule["priority"],
@@ -313,8 +347,8 @@ class Scheduler:
                         await self.task_queue.enqueue(task)
                         
                         # Update next run time
-                        schedule["last_run"] = datetime.utcnow()
-                        schedule["next_run"] = datetime.utcnow() + timedelta(seconds=schedule["interval_seconds"])
+                        schedule["last_run"] = datetime.now(timezone.utc)
+                        schedule["next_run"] = datetime.now(timezone.utc) + timedelta(seconds=schedule["interval_seconds"])
                 
                 await asyncio.sleep(60)  # Check every minute
                 
@@ -446,7 +480,7 @@ class AgentMemoryClient:
                 "value": value,
                 "agent": agent,
                 "confidence": confidence,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             async with session.post(f"http://localhost:3333/memory/store", json=payload) as resp:
                 return resp.status == 200
@@ -488,7 +522,7 @@ async def run_scheduler_once() -> List[Dict[str, Any]]:
     results = []
     
     for agent_name, schedule in scheduler._schedules.items():
-        if schedule["next_run"] <= datetime.utcnow():
+        if schedule["next_run"] <= datetime.now(timezone.utc):
             # Execute agent callback
             callback = scheduler._agent_callbacks.get(schedule["agent_name"])
             if callback:
@@ -497,7 +531,7 @@ async def run_scheduler_once() -> List[Dict[str, Any]]:
                     results.append({
                         "agent": schedule["agent_name"],
                         "result": result,
-                        "executed_at": datetime.utcnow().isoformat(),
+                        "executed_at": datetime.now(timezone.utc).isoformat(),
                     })
                 except Exception as e:
                     logger.error(f"Agent {schedule['agent_name']} failed: {e}")

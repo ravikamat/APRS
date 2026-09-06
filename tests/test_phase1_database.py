@@ -64,7 +64,7 @@ class TestPhase1Database(unittest.TestCase):
         cur = self.conn.cursor()
         cur.execute('''
             INSERT INTO master_products (product_id, name, category, region, planned_msrp, landed_cogs, gross_margin_pct, estimated_cac, net_profit_pct, worst_case_stress_margin_pct, status, overall_score, consensus_status, first_discovered_date, last_evaluated_date, sourcing_cluster)
-            VALUES ('TEST_UNIQUE_001', 'Test', 'Cat', 'USA', 50, 10, 20, 5, 10, 5, 'PENDING', 50, 'PENDING', date('now'), date('now'), '')
+            VALUES ('TEST_UNIQUE_001', 'Test', 'Cat', 'USA', 50, 10, 20, 5, 10, 5, 'PENDING', 50, 'CONSENSUS_PASS', date('now'), date('now'), '')
         ''')
         self.conn.commit()
         
@@ -88,7 +88,7 @@ class TestPhase1Database(unittest.TestCase):
         cur = self.conn.cursor()
         cur.execute('''
             INSERT INTO master_products (product_id, name, category, region, planned_msrp, landed_cogs, gross_margin_pct, estimated_cac, net_profit_pct, worst_case_stress_margin_pct, status, overall_score, consensus_status, first_discovered_date, last_evaluated_date, sourcing_cluster)
-            VALUES ('TEST_GATE_INIT', 'Test', 'Cat', 'USA', 50, 10, 20, 5, 10, 5, 'PENDING', 50, 'PENDING', date('now'), date('now'), '')
+            VALUES ('TEST_GATE_INIT', 'Test', 'Cat', 'USA', 50, 10, 20, 5, 10, 5, 'PENDING', 50, 'CONSENSUS_PASS', date('now'), date('now'), '')
         ''')
         self.conn.commit()
         gate = get_current_gate("TEST_GATE_INIT")

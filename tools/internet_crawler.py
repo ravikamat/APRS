@@ -521,6 +521,7 @@ class InternetCrawler:
         self.web_agent = WebAgent()
         self.llm_router = None  # Lazy init
         self._session = None
+        self.source_discovery = None  # Lazy init SourceDiscoveryEngine
 
         # Track source health
         self.source_stats = {}
@@ -549,6 +550,12 @@ class InternetCrawler:
             from core.llm_router import LLMRouter
             self.llm_router = LLMRouter()
         return self.llm_router
+
+    def _get_source_discovery(self):
+        """Lazy-init SourceDiscoveryEngine."""
+        if self.source_discovery is None:
+            self.source_discovery = SourceDiscoveryEngine()
+        return self.source_discovery
 
     async def crawl_cycle(self) -> Dict[str, Any]:
         """
@@ -681,11 +688,23 @@ class InternetCrawler:
 
             # Parse result
             if isinstance(result, dict) and "items" in result:
-                return result["items"]
+                items = result["items"]
             elif isinstance(result, list):
-                return result
+                items = result
             else:
-                return []
+                items = []
+
+            # Run AI source discovery on the page content
+            if items:
+                try:
+                    # Get page content for source discovery
+                    page_content = str(items)[:3000]
+                    discovery_engine = self._get_source_discovery()
+                    await discovery_engine.discover_new_sources_from_content(page_content, url)
+                except Exception as e:
+                    logger.debug(f"Source discovery failed for {url}: {e}")
+
+            return items
 
         except Exception as e:
             logger.error(f"WebAgent failed for {source['id']}: {e}")

@@ -4,7 +4,8 @@ import sys
 # Ensure UTF-8 output
 sys.stdout.reconfigure(encoding='utf-8')
 
-conn = sqlite3.connect("str(Path(__file__).resolve().parent.parent / 'data' / 'research_engine.db')")
+from pathlib import Path
+conn = sqlite3.connect(str(Path(__file__).resolve().parent.parent / 'data' / 'research_engine.db'))
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 cur.execute("SELECT product_id, name, category, region, planned_msrp, landed_cogs, gross_margin_pct, estimated_cac, net_profit_pct, worst_case_stress_margin_pct, status, overall_score, sourcing_cluster, marketplace_url, human_override_status, competitor_3star_flaws, upgrade_v2_engineering FROM master_products ORDER BY overall_score DESC")

@@ -11,12 +11,14 @@ Integrates lightweight anti-bot resilience and records structured signals into S
 All outputs are validated by deterministic quality checks.
 """
 import os
+import re
 import sys
 import json
 import time
-import re
+import random
 import urllib.request
 import logging
+import urllib.parse
 from typing import List, Dict, Any, Optional
 from urllib.parse import quote_plus
 from pathlib import Path
@@ -26,7 +28,8 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from core.database import record_trend_signal, get_connection, get_seed_keywords, get_discovered_sources, update_source_usage, record_seed_keyword
+from config.settings import settings
+from core.database import record_trend_signal, get_connection, get_seed_keywords, get_discovered_sources, update_source_usage, record_seed_keyword, update_seed_usage
 from core.utils import normalize_region
 from tools.adapters.base_adapter import BaseSourceAdapter, SourceHealth
 
@@ -197,6 +200,10 @@ class OpenWebTrendScout(BaseSourceAdapter):
             
         return signals
 
+    def record_success(self, count: int, latency_ms: int):
+        """Record successful signal extraction for health monitoring."""
+        super().record_success(count, latency_ms)
+
     def harvest_all_active_trends(self, region: str = "India", max_signals: int = 15) -> List[Dict[str, Any]]:
         """
         Runs comprehensive multi-source scouting across Google Trends, Reddit, and dynamically
@@ -204,31 +211,32 @@ class OpenWebTrendScout(BaseSourceAdapter):
         hardcoded lists only if DB is empty. Discovered keywords are fed back as new seeds.
         All outputs are validated by deterministic quality checks.
         """
-        import time as _time
-        all_signals = []
-        norm_region = normalize_region(region)
-        
-        # Load dynamic seeds from DB, fallback to hardcoded
-        db_seeds = get_seed_keywords(region=norm_region, limit=20)
-        if db_seeds:
-            seeds = [s["keyword"] for s in db_seeds]
-            # Mark seeds as used
-            for s in db_seeds[:4]:
-                try:
-                    update_seed_usage(s["seed_id"])
-                except Exception:
-                    pass
-        else:
-            seeds = VIRAL_SEED_ROOTS.get(norm_region, VIRAL_SEED_ROOTS.get("India", []))
-
+        try:
+            import time as _time
+            all_signals = []
+            norm_region = normalize_region(region)
+            
+            # Load dynamic seeds from DB, fallback to hardcoded
+            db_seeds = get_seed_keywords(region=norm_region, limit=20)
+            if db_seeds:
+                seeds = [s["keyword"] for s in db_seeds]
+                # Mark seeds as used
+                for s in db_seeds[:4]:
+                    try:
+                        update_seed_usage(s["seed_id"])
+                    except Exception:
+                        pass
+            else:
+                seeds = VIRAL_SEED_ROOTS.get(norm_region, VIRAL_SEED_ROOTS.get("India", []))
+            
             # 1. Google Autocomplete Search Breakout (using dynamic seeds)
             for seed in seeds[:6]:
                 google_signals = self.scout_google_breakout_queries(seed, region=region)
                 all_signals.extend(google_signals)
                 self.record_success(len(google_signals), 500)
-                _time.sleep(0.8)
-
-            # ── Load dynamic Reddit communities from DB, fallback to hardcoded ───
+                time.sleep(0.8)
+            
+            # Load dynamic Reddit communities from DB, fallback to hardcoded
             db_communities = get_discovered_sources(source_type="community_reddit", region=region)
             if db_communities:
                 subreddits = []
@@ -240,7 +248,7 @@ class OpenWebTrendScout(BaseSourceAdapter):
                         subreddits.append({"name": match.group(1), "source_id": c.get("source_id")})
             else:
                 subreddits = [{"name": s, "source_id": None} for s in COMMUNITY_SUBREDDITS]
-
+            
             # 2. Reddit Community Breakout (using dynamic communities)
             for sub_info in subreddits[:5]:
                 reddit_signals = self.scout_reddit_product_discussions(subreddit=sub_info["name"], limit=4)
@@ -248,8 +256,8 @@ class OpenWebTrendScout(BaseSourceAdapter):
                 if sub_info.get("source_id"):
                     update_source_usage(sub_info["source_id"], yielded_results=len(reddit_signals) > 0)
                 self.record_success(len(reddit_signals), 800)
-
-            # ── 3. Explore dynamically discovered trend sources ──────────────────
+            
+            # 3. Explore dynamically discovered trend sources
             db_trend_sources = get_discovered_sources(source_type="trend", region=region)
             for src in db_trend_sources[:3]:
                 try:
@@ -278,11 +286,11 @@ class OpenWebTrendScout(BaseSourceAdapter):
                         update_source_usage(src["source_id"], yielded_results=True)
                 except Exception as e:
                     logger.debug(f"Discovered source scrape failed: {e}")
-
-            # ── 4. Deduplicate & Record to DB ────────────────────────────────────
+            
+            # 4. Deduplicate & Record to DB
             recorded_signals = []
             seen_kws = set()
-
+            
             for sig in all_signals:
                 kw_norm = sig["keyword"].lower().strip()
                 if kw_norm not in seen_kws and len(kw_norm) > 4:
@@ -291,7 +299,7 @@ class OpenWebTrendScout(BaseSourceAdapter):
                         platform=sig["platform"],
                         keyword=sig["keyword"],
                         category=sig.get("trend_category", "General"),
-                        region=sig["region"],
+                        region=region,
                         search_volume_est=sig.get("search_volume_est", 5000),
                         velocity_score=sig.get("velocity_score", 75.0),
                         longevity_days=sig.get("longevity_days", 14),
@@ -299,23 +307,31 @@ class OpenWebTrendScout(BaseSourceAdapter):
                     )
                     sig["signal_id"] = sig_id
                     recorded_signals.append(sig)
-
-                    # ── Feed discovered keywords back as new seeds ───────────
+                
+                    # Feed discovered keywords back as new seeds
                     try:
                         record_seed_keyword(
                             keyword=sig["keyword"],
-                            region=sig["region"],
+                            region=region,
                             source_platform=sig["platform"],
                             velocity_score=sig.get("velocity_score", 50.0)
                         )
                     except Exception:
                         pass
-
+                
+                # Small delay to avoid database locking
+                time.sleep(random.uniform(0.2, 0.5))
+                
                 if len(recorded_signals) >= max_signals:
                     break
-
+            
             logger.info(f"OpenWebTrendScout: Harvested {len(recorded_signals)} signals for {region}")
             return recorded_signals
+        except Exception as e:
+            import traceback
+            print(f"ERROR in harvest_all_active_trends: {e}")
+            traceback.print_exc()
+            return []
 
 
 if __name__ == "__main__":

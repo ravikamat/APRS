@@ -49,12 +49,13 @@ class TestPhase2Orchestrator(unittest.TestCase):
         self.assertEqual(orch.mode, OrchestratorMode.SINGLE_CYCLE)
 
     def test_agent_order_has_all_agents(self):
-        """Agent execution order includes all 9 pipeline agents."""
+        """Agent execution order includes all 16 pipeline agents."""
         orch = AgentOrchestrator()
         expected = [
-            "internet_crawler", "trend_signal", "niche_expander",
-            "discovery", "problem_miner", "gate_engine",
-            "supplier_agent", "outreach_engine", "learning_agent",
+            "strategy_planner", "ai_scout", "internet_crawler", "trend_signal",
+            "demand_sense", "competition_xray", "niche_expander", "discovery",
+            "problem_miner", "gate_engine", "supplier_agent", "outreach_engine",
+            "winner_score", "maintenance", "weight_tuner", "learning_agent",
         ]
         self.assertEqual(orch.AGENT_ORDER, expected)
 
