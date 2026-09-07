@@ -1,7 +1,7 @@
 # APRS V6 Pro - Git Ignore
 
 # Environment & Secrets
-.env
+# .env
 .env.local
 .env.*.local
 
