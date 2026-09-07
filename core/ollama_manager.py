@@ -30,6 +30,52 @@ def is_ollama_running(url: str = "http://localhost:11434", timeout: float = 1.5)
         return False
 
 
+def pull_ollama_model(model: str, url: str = "http://localhost:11434", max_wait_sec: int = 300) -> bool:
+    """Pull a model from Ollama registry if not already installed."""
+    try:
+        logger.info(f"Pulling Ollama model: {model}...")
+        result = subprocess.run(
+            ["ollama", "pull", model],
+            capture_output=True,
+            text=True,
+            timeout=max_wait_sec
+        )
+        if result.returncode == 0:
+            logger.info(f"Successfully pulled model: {model}")
+            return True
+        else:
+            logger.error(f"Failed to pull model {model}: {result.stderr}")
+            return False
+    except subprocess.TimeoutExpired:
+        logger.error(f"Model pull timed out after {max_wait_sec}s")
+        return False
+    except Exception as e:
+        logger.error(f"Error pulling model {model}: {e}")
+        return False
+
+
+def ensure_model_available(model: str, url: str = "http://localhost:11434") -> bool:
+    """Ensure model is installed, pull if missing."""
+    if not ensure_ollama_running(url):
+        return False
+    
+    # Check if model exists
+    try:
+        req = urllib.request.Request(f"{url.rstrip('/')}/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m.get("name", "") for m in data.get("models", [])]
+            # Check for exact match or with tag
+            for m in models:
+                if m == model or m.startswith(model + ":"):
+                    return True
+    except Exception:
+        pass
+    
+    # Model not found, pull it
+    return pull_ollama_model(model, url)
+
+
 def ensure_ollama_running(url: str = "http://localhost:11434", max_wait_sec: int = 15) -> bool:
     """
     Guarantees that Ollama is running. If offline, automatically spawns 'ollama serve'

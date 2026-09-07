@@ -125,6 +125,66 @@ st.markdown("""
     .sidebar-header { font-size:1.1rem; font-weight:700; color:#1E293B; margin-bottom:0.5rem; }
     .live-indicator { display:inline-flex; align-items:center; gap:6px; }
     
+    /* Top Header - Primary Control Bar */
+    .top-header { 
+        background: linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%); 
+        border: 1px solid #E2E8F0; 
+        border-radius: 12px; 
+        padding: 16px 20px; 
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .top-header .stButton > button {
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    .top-header .stButton > button[kind="primary"] {
+        background: #2563EB;
+        border-color: #2563EB;
+    }
+    .top-header .stButton > button[kind="primary"]:hover {
+        background: #1D4ED8;
+        border-color: #1D4ED8;
+    }
+    .top-header .stTextInput > div > div > input {
+        border-radius: 8px;
+        border: 1px solid #E2E8F0;
+    }
+    .top-header .stSelectbox > div > div {
+        border-radius: 8px;
+    }
+    
+    /* Sidebar as Filter Panel */
+    .stSidebar { background: #F8FAFC !important; }
+    .stSidebar .stMetric { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 8px 12px; }
+    .stSidebar .stSelectbox > div > div { border-radius: 6px; }
+    .stSidebar .stCheckbox > label { color: #1E293B; }
+    
+    /* Hide default streamlit header/footer */
+    header[data-testid="stHeader"] { display: none; }
+    footer { display: none; }
+    
+    /* Ensure tabs are prominent */
+    .stTabs [data-baseweb="tab-list"] { 
+        background: #FFFFFF; 
+        border: 1px solid #E2E8F0; 
+        border-radius: 10px; 
+        padding: 4px; 
+        gap: 4px;
+    }
+    .stTabs [data-baseweb="tab"] { 
+        background: transparent; 
+        border-radius: 6px; 
+        color: #475569 !important; 
+        font-weight: 500;
+    }
+    .stTabs [aria-selected="true"] { 
+        background: #2563EB !important; 
+        color: white !important; 
+        box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+    }
+    
     /* Flow Graph Styles */
     .flow-node { 
         display:inline-flex; flex-direction:column; align-items:center; 
@@ -367,9 +427,9 @@ if sel_category != "All":
 if show_shortlisted_only:
     filtered = [p for p in filtered if p.get("is_shortlisted", 0) == 1]
 
-# ═════════════════════════════════════════════════════════════════════════════
-# TOP HEADER BAR — Always visible
-# ═════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# TOP CONTROL BAR — Single unified header with status, daemon controls & search
+# ══════════════════════════════════════════════════════════════════════════════
 status = daemon_controller.get_status()
 table_counts = daemon_controller.get_live_table_counts()
 
@@ -377,154 +437,142 @@ table_counts = daemon_controller.get_live_table_counts()
 nim_led = "🟢"  # Would check actual NIM connectivity
 groq_led = "🟢"  # Would check Groq
 ollama_led = "🟡"  # Would check Ollama
-daemon_led = "🟢" if status["running"] else ("🟡" if status["is_paused"] else "🔴")
+daemon_running = status["running"]
+daemon_paused = status["is_paused"]
 
-# Header Row 1: Status & Daemon Controls
-hdr_col1, hdr_col2, hdr_col3 = st.columns([3, 2.5, 2.5])
-with hdr_col1:
+# Single unified header row
+st.markdown('<div class="top-header">', unsafe_allow_html=True)
+
+# Row 1: Service Status + Daemon Controls + Search
+col_status, col_controls, col_search = st.columns([2.5, 2.5, 3])
+
+with col_status:
     st.markdown(f"""
-    <div class="live-indicator">
-        <span class="status-led led-{'green' if nim_led=='🟢' else 'gray'}"></span>NIM 550B
-        <span class="status-led led-{'green' if groq_led=='🟢' else 'gray'}"></span>Groq
-        <span class="status-led led-{'yellow' if ollama_led=='🟡' else 'green' if ollama_led=='🟢' else 'gray'}"></span>Ollama
-        <span class="status-led led-{'green' if daemon_led=='🟢' else 'yellow' if daemon_led=='🟡' else 'red'}"></span><strong>{'24/7 Daemon ACTIVE' if status['running'] else 'Daemon PAUSED' if status['is_paused'] else 'Daemon STOPPED'}</strong>
+    <div class="live-indicator" style="gap:12px; flex-wrap:wrap;">
+        <span class="status-led led-{'green' if nim_led=='🟢' else 'gray'}"></span><strong>NIM 550B</strong>
+        <span class="status-led led-{'green' if groq_led=='🟢' else 'gray'}"></span><strong>Groq</strong>
+        <span class="status-led led-{'yellow' if ollama_led=='🟡' else 'green' if ollama_led=='🟢' else 'gray'}"></span><strong>Ollama</strong>
+        <span class="status-led led-{'green' if daemon_running else 'yellow' if daemon_paused else 'red'}"></span>
+        <strong style="color:{'#059669' if daemon_running else '#D97706' if daemon_paused else '#DC2626'};">
+            {'● ACTIVE' if daemon_running else '⏸ PAUSED' if daemon_paused else '■ STOPPED'}
+        </strong>
     </div>
     """, unsafe_allow_html=True)
 
-with hdr_col2:
-    chips_html = " ".join([f'<span class="table-chip">{k}: {v:,}</span>' for k, v in [
-        ("Products", table_counts.get("master_products", 0)),
-        ("Niches", table_counts.get("dynamic_niches", 0)),
-        ("Suppliers", table_counts.get("supplier_profiles", 0)),
-        ("Outreach", table_counts.get("outreach_drafts", 0)),
-        ("Rules", table_counts.get("learned_rules", 0)),
-        ("Shortlisted", len(shortlisted)),
-    ]])
-    st.markdown(chips_html, unsafe_allow_html=True)
-
-with hdr_col3:
-    # Daemon controls - cleaner layout
-    if not status["running"]:
-        if st.button("▶️ Start Daemon", type="primary", use_container_width=True, key="daemon_start"):
+with col_controls:
+    # Daemon Controls - always visible
+    dc1, dc2, dc3, dc4 = st.columns(4)
+    
+    if not daemon_running:
+        # Daemon stopped - show START button prominently
+        if dc1.button("▶️ START", type="primary", use_container_width=True, key="daemon_start_main"):
             daemon_controller.start()
             st.rerun()
+        dc2.caption("Daemon stopped")
+        dc3.caption("")
+        dc4.caption("")
     else:
-        c1, c2, c3 = st.columns(3)
-        if status["is_paused"]:
-            if c1.button("▶ Resume", use_container_width=True, key="daemon_resume"):
+        # Daemon running - show PAUSE/RESUME + FORCE CYCLE
+        if daemon_paused:
+            if dc1.button("▶ RESUME", type="primary", use_container_width=True, key="daemon_resume_main"):
                 daemon_controller.resume()
                 st.rerun()
         else:
-            if c1.button("⏸ Pause", use_container_width=True, key="daemon_pause"):
+            if dc1.button("⏸ PAUSE", use_container_width=True, key="daemon_pause_main"):
                 daemon_controller.pause()
                 st.rerun()
-        if c2.button("🔄 Force Cycle", use_container_width=True, key="daemon_cycle"):
+        
+        if dc2.button("🔄 CYCLE", use_container_width=True, key="daemon_cycle_main"):
             daemon_controller.trigger_cycle_now()
-            st.toast("Cycle triggered!")
-        with c3:
-            with st.popover("📜 Live Log"):
-                logs = daemon_controller.stream_log_tail(50)
+            st.toast("⚡ Cycle triggered!")
+        
+        with dc3:
+            with st.popover("📜 Logs", use_container_width=True):
+                logs = daemon_controller.stream_log_tail(30)
                 for log in reversed(logs):
                     st.text(log)
-                if st.button("Clear Log", key="clear_log"):
+                if st.button("Clear", key="clear_log_main"):
                     daemon_controller.recent_logs.clear()
                     st.rerun()
-
-# Header Row 2: Manual Product Search & Quick Stats
-st.markdown('<div class="top-header">', unsafe_allow_html=True)
-
-# Initialize search expand state
-if "search_expanded" not in st.session_state:
-    st.session_state["search_expanded"] = False
-
-# Search expandable button
-search_col1, search_col2, search_col3 = st.columns([2, 4, 2])
-with search_col1:
-    if st.button(
-        "🔍 Product Search" + (" ▼" if st.session_state["search_expanded"] else " ▶"),
-        use_container_width=True,
-        key="search_toggle"
-    ):
-        st.session_state["search_expanded"] = not st.session_state["search_expanded"]
-        st.rerun()
-
-with search_col2:
-    if st.session_state["search_expanded"]:
-        # Inline search form
-        s1, s2, s3, s4 = st.columns([3, 2, 2, 1])
-        with s1:
-            search_query = st.text_input(
-                "Search products...",
-                placeholder="Enter product name, ID, category, or ASIN",
-                key="product_search_input",
-                label_visibility="collapsed"
-            )
-        with s2:
-            search_region = st.selectbox(
-                "Region",
-                ["All"] + sorted({p["region"] for p in products if p.get("region")}),
-                key="search_region",
-                label_visibility="collapsed"
-            )
-        with s3:
-            search_category = st.selectbox(
-                "Category",
-                ["All"] + sorted({p["category"] for p in products if p.get("category")}),
-                key="search_category",
-                label_visibility="collapsed"
-            )
-        with s4:
-            search_btn = st.button("🔍 Search", type="primary", use_container_width=True, key="product_search_btn")
         
-        # Execute search
-        if search_btn or (search_query and len(search_query) >= 2):
-            search_results = products
-            if search_query:
-                sq = search_query.lower()
-                search_results = [p for p in search_results if 
-                    sq in p.get("name", "").lower() or
-                    sq in p.get("product_id", "").lower() or
-                    sq in p.get("category", "").lower() or
-                    sq in p.get("amazon_asin", "").lower()
-                ]
-            if search_region != "All":
-                search_results = [p for p in search_results if p.get("region") == search_region]
-            if search_category != "All":
-                search_results = [p for p in search_results if p.get("category") == search_category]
-            
-            if search_results:
-                st.success(f"Found {len(search_results)} matching products")
-                # Show top 10 results inline
-                for p in search_results[:10]:
-                    sc1, sc2, sc3, sc4 = st.columns([3, 1, 1, 1])
-                    with sc1:
-                        st.markdown(f"**{p['name'][:55]}**  \n<small>{p.get('category','')} | {p.get('region','')} | {format_inr(p.get('planned_msrp',0))}</small>", unsafe_allow_html=True)
-                    with sc2:
-                        st.caption(f"Score: {p.get('overall_score',0):.0f}")
-                    with sc3:
-                        st.caption(f"Status: {p.get('status','PENDING')}")
-                    with sc4:
-                        if st.button("View", key=f"search_view_{p['product_id']}", use_container_width=True):
-                            st.session_state["search_expanded"] = False
-                            st.session_state["view_product_id"] = p["product_id"]
-                            st.session_state["active_tab"] = "opportunities"
-                            st.rerun()
-            else:
-                st.warning("No products found matching your criteria")
+        dc4.caption(f"Cycle #{status.get('cycle_count', 0)}")
 
-with search_col3:
-    # Quick action buttons
-    qc1, qc2 = st.columns(2)
-    with qc1:
-        if st.button("📋 View All", use_container_width=True, key="search_view_all"):
-            st.session_state["search_expanded"] = False
+with col_search:
+    # Product Search - expandable
+    if "search_expanded" not in st.session_state:
+        st.session_state["search_expanded"] = False
+    
+    sc1, sc2 = st.columns([1, 5])
+    with sc1:
+        if st.button(
+            "🔍 Search" + (" ▼" if st.session_state["search_expanded"] else " ▶"),
+            use_container_width=True,
+            key="search_toggle_main"
+        ):
+            st.session_state["search_expanded"] = not st.session_state["search_expanded"]
             st.rerun()
-    with qc2:
-        if st.button("➕ Add Manual", use_container_width=True, key="search_add_manual"):
-            st.toast("Manual product entry - use CLI for now")
-            st.rerun()
+    
+    with sc2:
+        if st.session_state["search_expanded"]:
+            s1, s2, s3, s4 = st.columns([3, 1.5, 1.5, 1])
+            with s1:
+                search_query = st.text_input(
+                    "Search", placeholder="Product name, ID, category, ASIN...",
+                    key="product_search_input_main", label_visibility="collapsed"
+                )
+            with s2:
+                search_region = st.selectbox("Region", ["All"] + sorted({p["region"] for p in products if p.get("region")}), key="search_region_main", label_visibility="collapsed")
+            with s3:
+                search_category = st.selectbox("Category", ["All"] + sorted({p["category"] for p in products if p.get("category")}), key="search_category_main", label_visibility="collapsed")
+            with s4:
+                search_btn = st.button("🔍", type="primary", use_container_width=True, key="product_search_btn_main", help="Search")
+            
+            if search_btn or (search_query and len(search_query) >= 2):
+                sq = search_query.lower() if search_query else ""
+                search_results = products
+                if sq:
+                    search_results = [p for p in search_results if 
+                        sq in p.get("name", "").lower() or
+                        sq in p.get("product_id", "").lower() or
+                        sq in p.get("category", "").lower() or
+                        sq in p.get("amazon_asin", "").lower()
+                    ]
+                if search_region != "All":
+                    search_results = [p for p in search_results if p.get("region") == search_region]
+                if search_category != "All":
+                    search_results = [p for p in search_results if p.get("category") == search_category]
+                
+                if search_results:
+                    st.caption(f"Found {len(search_results)} matches")
+                    for p in search_results[:8]:
+                        r1, r2, r3, r4 = st.columns([3, 1, 1, 1])
+                        with r1:
+                            st.markdown(f"**{p['name'][:45]}**  \n<small>{p.get('category','')} • {p.get('region','')} • {format_inr(p.get('planned_msrp',0))}</small>", unsafe_allow_html=True)
+                        with r2:
+                            st.caption(f"Score: {p.get('overall_score',0):.0f}")
+                        with r3:
+                            st.caption(p.get('status','PENDING'))
+                        with r4:
+                            if st.button("Open", key=f"sv_{p['product_id']}", use_container_width=True):
+                                st.session_state["search_expanded"] = False
+                                st.session_state["view_product_id"] = p["product_id"]
+                                st.session_state["active_tab"] = "opportunities"
+                                st.rerun()
+                else:
+                    st.caption("No matches found")
 
 st.markdown('</div>', unsafe_allow_html=True)
+
+# Quick stats chips row
+chips_html = " ".join([f'<span class="table-chip">{k}: {v:,}</span>' for k, v in [
+    ("Products", table_counts.get("master_products", 0)),
+    ("Niches", table_counts.get("dynamic_niches", 0)),
+    ("Suppliers", table_counts.get("supplier_profiles", 0)),
+    ("Outreach", table_counts.get("outreach_drafts", 0)),
+    ("Rules", table_counts.get("learned_rules", 0)),
+    ("Shortlisted", len(shortlisted)),
+]])
+st.markdown(chips_html, unsafe_allow_html=True)
 
 st.divider()
 

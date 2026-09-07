@@ -98,11 +98,10 @@ def count_rows_written(agent_name: str, cycle_id: str = None) -> Dict[str, int]:
         conn.close()
         return {}
     
-    # Tables that have cycle_id column
+    # Tables that have cycle_id column (only those that actually have it in DB schema)
     tables_with_cycle_id = {
-        'discovered_sources', 'dynamic_niches', 
-        'dynamic_seed_keywords', 'scraped_listings', 'scraper_validations',
-        'master_products', 'economics_assessments', 'defect_clusters',
+        'scraped_listings', 'scraper_validations',
+        'economics_assessments', 'defect_clusters',
         'gate_logs', 'supplier_profiles', 'outreach_drafts',
         'launchpad_items', 'problem_opportunities', 'winner_scores',
         'pipeline_fsm', 'research_directives', 'agent_health',

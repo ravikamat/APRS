@@ -226,6 +226,7 @@ class LLMRouter:
         json_mode: bool = False,
         max_tokens: int = 2048,
         force_tier: Optional[int] = None,
+        temperature: Optional[float] = None,
     ) -> LLMResponse:
         """
         Call LLM with automatic 5-tier fallback.
@@ -240,7 +241,8 @@ class LLMRouter:
         # Determine starting tier
         start_tier = force_tier or agent_override or self.TASK_DEFAULT_TIER.get(task_type, 1)
         
-        for tier_num in range(start_tier, 6):
+        # Try tiers 1-4 (LLM tiers)
+        for tier_num in range(start_tier, 5):
             if not self._is_tier_enabled(tier_num):
                 continue
             if not self.health[tier_num]:
@@ -251,7 +253,7 @@ class LLMRouter:
                 continue
             
             try:
-                result = await self._call_tier(tier_num, messages, json_mode, max_tokens)
+                result = await self._call_tier(tier_num, messages, json_mode, max_tokens, temperature)
                 result.latency_ms = int((time.time() - start_time) * 1000)
                 result.tier_used = tier_num
                 result.tier_name = self.TIERS[tier_num]
@@ -280,20 +282,20 @@ class LLMRouter:
         # All tiers failed → Tier 5: human override
         return await self._human_override(messages, agent_name, task_type, start_time)
     
-    async def _call_tier(self, tier: int, messages: List[Dict], json_mode: bool, max_tokens: int) -> LLMResponse:
+    async def _call_tier(self, tier: int, messages: List[Dict], json_mode: bool, max_tokens: int, temperature: Optional[float] = None) -> LLMResponse:
         """Dispatch to appropriate tier implementation."""
         if tier == 1:
-            return await self._call_nim(messages, json_mode, max_tokens)
+            return await self._call_nim(messages, json_mode, max_tokens, temperature)
         if tier == 2:
-            return await self._call_ollama(messages, json_mode, max_tokens)
+            return await self._call_ollama(messages, json_mode, max_tokens, temperature)
         if tier == 3:
-            return await self._call_groq(messages, json_mode, max_tokens)
+            return await self._call_groq(messages, json_mode, max_tokens, temperature)
         if tier == 4:
             return await self._get_kimi_wrapper().chat(messages, max_tokens)
         
         raise ValueError(f"Invalid tier: {tier}")
     
-    async def _call_nim(self, messages: List[Dict], json_mode: bool, max_tokens: int) -> LLMResponse:
+    async def _call_nim(self, messages: List[Dict], json_mode: bool, max_tokens: int, temperature: Optional[float] = None) -> LLMResponse:
         """Call NIM 550B via OpenAI-compatible API."""
         if not settings.nim_api_key:
             raise ServiceUnavailable("NIM_API_KEY not configured")
@@ -302,7 +304,7 @@ class LLMRouter:
         payload = {
             "model": settings.nim_model,
             "messages": messages,
-            "temperature": settings.nim_temperature,
+            "temperature": temperature if temperature is not None else settings.nim_temperature,
             "max_tokens": max_tokens,
         }
         if json_mode:
@@ -343,15 +345,19 @@ class LLMRouter:
                 tokens_used=usage.get("total_tokens", 0),
             )
     
-    async def _call_ollama(self, messages: List[Dict], json_mode: bool, max_tokens: int) -> LLMResponse:
+    async def _call_ollama(self, messages: List[Dict], json_mode: bool, max_tokens: int, temperature: Optional[float] = None) -> LLMResponse:
         """Call local Ollama via HTTP API with automatic background daemon start."""
         if not settings.ollama_url:
             raise ServiceUnavailable("OLLAMA_URL not configured")
         
         # Ensure Ollama daemon is active in background
-        from core.ollama_manager import ensure_ollama_running
+        from core.ollama_manager import ensure_ollama_running, ensure_model_available
         if not ensure_ollama_running(settings.ollama_url):
             raise ServiceUnavailable("Local Ollama server is offline and auto-start failed")
+        
+        # Ensure model is available, pull if missing
+        if not ensure_model_available(settings.ollama_model, settings.ollama_url):
+            raise ServiceUnavailable(f"Ollama model '{settings.ollama_model}' not available and auto-pull failed")
         
         # Convert messages to Ollama format
         prompt = self._messages_to_prompt(messages)
@@ -361,7 +367,7 @@ class LLMRouter:
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": settings.ollama_temperature,
+                "temperature": temperature if temperature is not None else settings.ollama_temperature,
                 "num_predict": max_tokens,
             },
         }
@@ -391,7 +397,7 @@ class LLMRouter:
                 latency_ms=latency_ms,
             )
     
-    async def _call_groq(self, messages: List[Dict], json_mode: bool, max_tokens: int) -> LLMResponse:
+    async def _call_groq(self, messages: List[Dict], json_mode: bool, max_tokens: int, temperature: Optional[float] = None) -> LLMResponse:
         """Call Groq Free API (OpenAI-compatible)."""
         if not settings.groq_api_key:
             raise ServiceUnavailable("GROQ_API_KEY not configured")
@@ -400,7 +406,7 @@ class LLMRouter:
         payload = {
             "model": settings.groq_model,
             "messages": messages,
-            "temperature": settings.groq_temperature,
+            "temperature": temperature if temperature is not None else settings.groq_temperature,
             "max_tokens": max_tokens,
         }
         if json_mode:

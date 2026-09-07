@@ -2099,7 +2099,7 @@ def record_discovered_source(url: str, source_type: str = "trend", source_name: 
         return None
 
 
-def get_discovered_sources(source_type: str = None, region: str = None, active_only: bool = True) -> List[Dict]:
+def get_discovered_sources(source_type: str = None, region: str = None, active_only: bool = True, limit: int = None) -> List[Dict]:
     """Get discovered sources, optionally filtered by type and region."""
     conn = get_connection()
     cur = conn.cursor()
@@ -2114,6 +2114,9 @@ def get_discovered_sources(source_type: str = None, region: str = None, active_o
         query += " AND (region = ? OR region = 'Global')"
         params.append(region)
     query += " ORDER BY reliability_score DESC, times_yielded_results DESC"
+    if limit:
+        query += " LIMIT ?"
+        params.append(limit)
     cur.execute(query, params)
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
